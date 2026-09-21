@@ -14,6 +14,8 @@ description: >-
 
 # Toolchain Config — Unified ESLint / Prettier / tsconfig / Husky
 
+> **When to use:** unifying ESLint / Prettier / tsconfig / Husky / lint-staged across a NestJS/TypeScript backend. Invoke with `/toolchain-config`, or "unify the eslint config" / "align tsconfig with the other services".
+
 Bring a NestJS / TypeScript backend onto the team's single reviewed toolchain
 baseline.
 

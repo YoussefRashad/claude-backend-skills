@@ -15,6 +15,8 @@ description: >-
 
 # Backend Standards
 
+> **When to use:** starting a new NestJS/TypeScript service, or bringing an existing one onto the team standard. Invoke with `/backend-standards`, or a phrase like "create a new backend service for X" / "apply our backend standards to this repo".
+
 Scaffold a service that follows the team standard from the first commit, and leave
 behind a repo that keeps following it without anyone remembering to.
 

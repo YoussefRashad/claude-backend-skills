@@ -5,6 +5,8 @@ description: Full-codebase safety-net audit for any backend project — the last
 
 # Audit — Full-Codebase Safety Net
 
+> **When to use:** a periodic safety net over the **entire** codebase, not a diff — the backstop when a PR skipped `/pr-review`. Invoke with `/audit` (security-only, fast) or `/audit --full` (all lanes). See options below.
+
 Audit the **entire codebase** (not a diff). This is the backstop: if `/pr-review` skipped a PR, or code merged without review, this scan catches it. Framework-aware, severity-ranked, and — critically — it **persists findings to a file** so you and the team can work through them.
 
 ## Modes

@@ -69,28 +69,53 @@ cp -r backend-standards toolchain-config project-setup pr-review audit ~/.claude
 
 ## Use
 
-**New service**
+Once installed, invoke a skill two ways: **explicitly** with `/<name>`
+(`/backend-standards`, `/pr-review`, `/audit`), or with a **natural-language** request that
+matches its trigger. The `<name>` is the skill's `name:` field, not its folder.
 
-> create a new backend service for `<X>`
+For a step-by-step guide to each skill — arguments, flags, and the `audit` options — see
+**[`USAGE.md`](USAGE.md)**.
 
-It asks what it cannot guess — sensitivity, versioning strategy, whether a released mobile
-client is involved, which external systems it calls — then scaffolds the project, installs
-the dependencies, applies the toolchain, copies the standards and source templates, and
-runs every gate.
+### Where each skill fits
 
-**Existing service**
+```mermaid
+flowchart TD
+    New["New service"] --> BS["/backend-standards"]
+    BS --> TC["/toolchain-config<br/>(lint · prettier · tsconfig · husky)"]
+    Existing["Existing repo,<br/>no Claude docs yet"] --> PS["/project-setup<br/>(docs + reviewer/docs-sync agents)"]
+    TC --> Dev["Day-to-day development"]
+    PS --> Dev
+    Dev -->|every PR, before merge| PR["/pr-review<br/>(diff gate)"]
+    Dev -->|periodic backstop| AU["/audit<br/>(whole codebase)"]
+    PR -->|catches what the diff shows| Merge["merge"]
+    AU -->|catches what no PR reviewed| Merge
+```
 
-> apply our backend standards to this repo
+### Quick reference
 
-A different and more cautious job: it documents what the project **actually is** into
-`.ai/standards/03-project-architecture.md`, records intentional differences in
-`known-deviations.md`, and installs the two review agents. It does **not** rewrite working
-code. A mismatch between the standard and a working codebase is information to report, not
-a defect to fix.
+| Want to…                                           | Skill               | Say                                        |
+| -------------------------------------------------- | ------------------- | ------------------------------------------ |
+| Start a new NestJS service on the standard         | `backend-standards` | "create a new backend service for `<X>`"   |
+| Bring an existing service onto the standard        | `backend-standards` | "apply our backend standards to this repo" |
+| Unify ESLint / Prettier / tsconfig / Husky         | `toolchain-config`  | "unify the eslint config in this repo"     |
+| Generate Claude docs + agents for an existing repo | `project-setup`     | `/project-setup`                           |
+| Review a PR / diff before merge                    | `pr-review`         | `/pr-review <PR-url \| branch \| paths>`   |
+| Security-scan the whole codebase                   | `audit`             | `/audit` (or `/audit --full`)              |
 
-**Toolchain only**
+**New service** (`backend-standards`) asks what it cannot guess — sensitivity, versioning
+strategy, whether a released mobile client is involved, which external systems it calls —
+then scaffolds the project, installs the dependencies, applies the toolchain, copies the
+standards and source templates, and runs every gate.
 
-> unify the eslint config in this repo
+**Existing service** (`backend-standards`, "apply…") is a more cautious job: it documents
+what the project **actually is** into `.ai/standards/03-project-architecture.md`, records
+intentional differences in `known-deviations.md`, and installs the two review agents. It
+does **not** rewrite working code — a mismatch between the standard and a working codebase
+is information to report, not a defect to fix.
+
+**`pr-review` vs `audit`:** `pr-review` gates one diff before merge; `audit` sweeps the
+whole codebase as a periodic backstop for whatever no PR reviewed. See `USAGE.md` for the
+`audit` modes (`--full`, `--path`, `--since`).
 
 ---
 

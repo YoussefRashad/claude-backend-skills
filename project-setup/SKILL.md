@@ -5,6 +5,8 @@ description: Set up Claude Code documentation structure, reviewer agent, and doc
 
 # Project Setup — Documentation & Agent Scaffolding
 
+> **When to use:** an existing backend repo that has no Claude Code docs/agents yet. Invoke with `/project-setup`, or "set up claude docs for this repo". Optional; nothing else here depends on it.
+
 Set up the full Claude Code configuration for a backend project: documentation structure, reviewer agent, docs-sync agent, `CLAUDE.md`, and settings — all generated from the **actual code**, never from templates.
 
 ## Prerequisites

@@ -5,6 +5,8 @@ description: Multi-lane review of a single PR or diff for any backend project â€
 
 # PR Review â€” Multi-Lane Diff Review & Vulnerability Scan
 
+> **When to use:** gating a single PR or diff before merge. Invoke with `/pr-review <PR-url | #number | branch | paths>` (no argument = current branch vs base), or "review this PR". For the whole codebase instead of a diff, use `/audit`.
+
 Run three independent lanes on the **same diff**, triage the results, and produce one severity-ranked report with a blocking verdict. Automated lanes catch what eyes miss; human-style lanes catch what tools miss. None alone is sufficient.
 
 ## Critical Rules (read first)
