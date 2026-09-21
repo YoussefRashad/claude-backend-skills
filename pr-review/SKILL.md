@@ -9,8 +9,8 @@ Run three independent lanes on the **same diff**, triage the results, and produc
 
 ## Critical Rules (read first)
 
-1. **Never read or review secret files:** `.env`, `.env.*`, `**/.env*`, `*.pem`, `*.key`, `*.crt`, `*.cer`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `**/id_rsa*`, `**/secrets/**`, `**/credentials/**`, `**/.aws/**`, `**/.ssh/**`, `**/.gnupg/**`. If a secret appears **inside the diff**, that is itself a Critical finding — report the file:line and the secret *type*, never echo the value.
-2. **Review only what changed.** Scope to the diff. Do not review `node_modules/`, `dist/`, `build/`, generated files, lockfiles (except to flag dependency risks), or migration snapshots — unless the change is *in* them.
+1. **Never read or review secret files:** `.env`, `.env.*`, `**/.env*`, `*.pem`, `*.key`, `*.crt`, `*.cer`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `**/id_rsa*`, `**/secrets/**`, `**/credentials/**`, `**/.aws/**`, `**/.ssh/**`, `**/.gnupg/**`. If a secret appears **inside the diff**, that is itself a Critical finding — report the file:line and the secret _type_, never echo the value.
+2. **Review only what changed.** Scope to the diff. Do not review `node_modules/`, `dist/`, `build/`, generated files, lockfiles (except to flag dependency risks), or migration snapshots — unless the change is _in_ them.
 3. **Every scanner finding is a candidate, not a verdict.** Triage for false positives before reporting (see Step 4). Label confidence.
 4. **Never auto-fix or commit.** Review only. Suggest fixes as diffs/instructions.
 5. **Fail loud, not silent.** If a lane can't run (tool missing, skill absent), say so in the report — don't drop it quietly.
@@ -20,12 +20,14 @@ Run three independent lanes on the **same diff**, triage the results, and produc
 ## Step 1 — Determine the diff
 
 Parse the user's argument:
+
 - **PR URL / number** → `gh pr diff <number>` (also pull PR title/description for intent)
 - **Branch name** → `git diff <base>...<branch>`
 - **File paths** → diff those paths against base
 - **No argument** → `git diff <base>...HEAD`
 
 Detect the base branch (don't assume `main`):
+
 ```
 git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
 ```
@@ -38,15 +40,16 @@ Capture, for the report's provenance: changed files, `+/-` line counts, and `git
 
 Run whatever is available; skip-and-note the rest. Prefer scanning only changed files where the tool allows.
 
-| Scan | Command (if tool present) | Catches |
-|------|---------------------------|---------|
-| Secrets | `gitleaks detect --no-git --source <changed> -v` or `trufflehog filesystem <changed>` | Committed keys/tokens |
-| SAST | `semgrep --config auto <changed>` (or `--config p/security-audit p/owasp-top-ten`) | Injection, SSRF, weak crypto, authz gaps |
-| Dependencies (SCA) | `npm audit --json` / `pnpm audit` / `pip-audit` / `govulncheck ./...` / `osv-scanner` | Known CVEs in deps |
-| Lint (security rules) | project linter (`eslint` w/ `eslint-plugin-security`, `ruff`, `gosec`) | Language-specific footguns |
-| Types (if TS) | `tsc --noEmit` on the branch | Type-safety regressions the diff introduces |
+| Scan                  | Command (if tool present)                                                             | Catches                                     |
+| --------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Secrets               | `gitleaks detect --no-git --source <changed> -v` or `trufflehog filesystem <changed>` | Committed keys/tokens                       |
+| SAST                  | `semgrep --config auto <changed>` (or `--config p/security-audit p/owasp-top-ten`)    | Injection, SSRF, weak crypto, authz gaps    |
+| Dependencies (SCA)    | `npm audit --json` / `pnpm audit` / `pip-audit` / `govulncheck ./...` / `osv-scanner` | Known CVEs in deps                          |
+| Lint (security rules) | project linter (`eslint` w/ `eslint-plugin-security`, `ruff`, `gosec`)                | Language-specific footguns                  |
+| Types (if TS)         | `tsc --noEmit` on the branch                                                          | Type-safety regressions the diff introduces |
 
 Rules for Lane A:
+
 - If **no** scanner is installed, note it prominently and continue with lanes B/C — but downgrade the report's confidence and add a `TODO` to install scanners in CI.
 - For `npm audit`, only surface advisories reachable from **direct** deps changed in this diff, or Critical/High transitive ones; don't dump the whole tree.
 - Capture raw counts per tool for the report header.
@@ -62,6 +65,7 @@ Two sub-passes, both security-focused:
 **B2 — `/audit` security checks.** If the `audit` skill exists in the project, apply its Security-lane checks (S1–S12) to the **changed files only** — PII logging, hard-coded secrets, SQL injection, missing validation, unguarded routes, broken auth, weak crypto, SSRF. If it doesn't exist, fold that checklist into B1. (Full-codebase scanning is `/audit`'s job, not this skill's — here it's diff-scoped.)
 
 Inline security checklist (fallback / supplement):
+
 - Secrets/credentials or PII in code **or logs**
 - SQL/NoSQL injection, raw/unparameterized queries, dynamic query building
 - Missing input validation / mass-assignment / unsafe deserialization
@@ -78,6 +82,7 @@ Inline security checklist (fallback / supplement):
 ## Step 4 — Lane C: Quality Review
 
 Correctness, performance, maintainability on the same diff:
+
 - **Correctness:** edge cases, null/undefined, off-by-one, error handling, transaction boundaries, backward compatibility of API/DB changes
 - **Performance:** N+1 queries, unbounded/unindexed queries, blocking I/O on hot paths, missing pagination, cache stampede, memory retention
 - **Maintainability:** naming, duplication, dead code, oversized functions/classes, leaky abstractions, SOLID violations
@@ -95,12 +100,13 @@ If a project `/code-review` skill exists, you may run it here instead of the inl
 4. **Sort** Critical → High → Medium → Low.
 
 ### Severity rubric
-| Severity | Definition |
-|----------|------------|
-| **Critical** | Exploitable now: secret in diff, injection, auth bypass, money/PII integrity loss, known Critical CVE reachable |
-| **High** | Serious but conditional: missing authz on sensitive route, race on shared state, High CVE, PII in logs |
-| **Medium** | Real risk, bounded: missing validation on non-sensitive input, N+1, weak error handling |
-| **Low / Nit** | Style, naming, minor perf, test gaps with low blast radius |
+
+| Severity      | Definition                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Critical**  | Exploitable now: secret in diff, injection, auth bypass, money/PII integrity loss, known Critical CVE reachable |
+| **High**      | Serious but conditional: missing authz on sensitive route, race on shared state, High CVE, PII in logs          |
+| **Medium**    | Real risk, bounded: missing validation on non-sensitive input, N+1, weak error handling                         |
+| **Low / Nit** | Style, naming, minor perf, test gaps with low blast radius                                                      |
 
 ---
 
@@ -131,10 +137,11 @@ Tools missing: <list> → see TODO.
 ```
 
 ### Blocking policy (deterministic)
+
 - **Any Critical → 🔴 Block Merge.** No exceptions from within this review.
 - **Any unresolved High → 🟡 Approve with required changes** (must fix before merge).
 - **Only Medium/Low → 🟢 Approve** (nits optional).
-State the rule that produced the verdict so it's auditable.
+  State the rule that produced the verdict so it's auditable.
 
 ---
 
@@ -142,6 +149,6 @@ State the rule that produced the verdict so it's auditable.
 
 - **Run all three lanes.** Report which ran and which were skipped; never fake coverage.
 - **Every finding is actionable** — each row has a concrete "fix by doing X".
-- **Never echo secret values**, even when the finding *is* a leaked secret — report type + location only.
+- **Never echo secret values**, even when the finding _is_ a leaked secret — report type + location only.
 - **Provenance matters** (fintech/audit): include base branch, commit range, and file counts in every report.
 - **No auto-fix, no commits.** Review only.

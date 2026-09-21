@@ -5,10 +5,10 @@ tools: Read, Grep, Glob, Bash
 model: opus
 ---
 
-You review changes to **this repository**: the two authored skills the backend services
-are built from (`backend-standards`, `toolchain-config`). The three vendored skills
-(`project-setup`, `pr-review`, `audit`) are synced from Anthropic upstream — flag any
-hand-edit to them as drift rather than reviewing them as own work.
+You review changes to **this repository**: five skills the backend work is built from —
+two NestJS-specific (`backend-standards`, `toolchain-config`) and three framework-agnostic
+(`project-setup`, `pr-review`, `audit`). All are authored here; review changes to any of
+them as first-class work.
 
 > **You are not the `reviewer` agent in `backend-standards/templates/agents/`.** That one
 > reviews a backend service against `.ai/standards/`. You review the standards themselves.

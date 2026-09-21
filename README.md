@@ -17,8 +17,7 @@ baseline go through review — see [`.github/CODEOWNERS`](.github/CODEOWNERS).
 config — that belongs to `toolchain-config`, because two skills shipping the same eslint
 config is how the two copies drift apart. Install both (see `ADR-001`).
 
-**General-purpose** — framework-agnostic, **vendored from Anthropic's skill set** and kept
-in upstream form (not authored here):
+**General-purpose** — framework-agnostic, authored here too:
 
 | Skill                             | What it does                                                                                                |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -182,12 +181,9 @@ claude-backend-skills/
 ├── toolchain-config/
 │   ├── SKILL.md
 │   └── templates/               eslint · prettier · tsconfig · husky · security-scan
-├── project-setup/               vendored from Anthropic — docs + agent scaffolding
-│   └── SKILL.md
-├── pr-review/                   vendored from Anthropic — per-PR multi-lane review
-│   └── SKILL.md
-└── audit/                       vendored from Anthropic — full-codebase safety net
-    └── SKILL.md
+├── project-setup/SKILL.md       general-purpose — docs + agent scaffolding
+├── pr-review/SKILL.md           general-purpose — per-PR multi-lane review
+└── audit/SKILL.md               general-purpose — full-codebase safety net
 ```
 
 ### Why source templates rather than descriptions

@@ -35,11 +35,11 @@ Install only `backend-standards` and you get the architecture, the source templa
 the standards — but no lint, formatting, compiler settings or git hooks. The skill will say
 so rather than quietly hand-rolling substitutes.
 
-## What is NOT bundled
+## `project-setup` — related, but optional
 
-`project-setup` is an **Anthropic plugin skill**, not part of this package. It is optional
-and only useful on existing projects, where it reverse-engineers documentation from code
-that already exists. Nothing here depends on it.
+`project-setup` is a separate general-purpose skill in this repo. It is optional and only
+useful on existing projects, where it reverse-engineers documentation from code that
+already exists. Nothing here depends on it.
 
 ---
 

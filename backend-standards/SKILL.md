@@ -53,9 +53,9 @@ that drifts is worse than a missing one that is known to be missing.
 
 ### `project-setup` — optional, existing projects only
 
-An Anthropic skill that reads an existing codebase and generates context documentation
-plus reviewer/docs-sync agents. It is now **vendored alongside this skill** (see
-`project-setup/`), but is still **not required** — nothing here depends on it.
+A general-purpose skill that reads an existing codebase and generates context documentation
+plus reviewer/docs-sync agents. It lives in this repo (see `project-setup/`), but is still
+**not required** — nothing here depends on it.
 
 If it happens to be installed and you are working on an **existing** project, running it
 first gives you a reverse-engineered picture of the codebase that makes filling
@@ -520,10 +520,9 @@ is required to read.
 
 ## Relationship to the other review skills
 
-`pr-review` and `audit` are **Anthropic skills, vendored into this repo** alongside this
-one (framework-agnostic, kept in upstream form). They overlap with the `reviewer` agent
-this skill installs, and the difference is worth being explicit about so neither gets
-skipped as "already covered":
+`pr-review` and `audit` are **framework-agnostic skills in this repo** alongside this one.
+They overlap with the `reviewer` agent this skill installs, and the difference is worth
+being explicit about so neither gets skipped as "already covered":
 
 |                               | Scope                    | Reviews against                                                                        |
 | ----------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |

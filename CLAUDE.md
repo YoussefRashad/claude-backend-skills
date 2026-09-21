@@ -2,9 +2,9 @@
 
 ## Overview
 
-Distribution repo for backend-engineering Claude Code skills: two authored here
-(`backend-standards`, `toolchain-config`) plus three vendored from Anthropic and kept in
-upstream form (`project-setup`, `pr-review`, `audit` — prettier-ignored, no version stamp).
+Distribution repo for five backend-engineering Claude Code skills. Two are opinionated and
+NestJS-specific (`backend-standards`, `toolchain-config`); three are framework-agnostic
+(`project-setup`, `pr-review`, `audit` — single `SKILL.md` files, no version stamp).
 **It ships no runtime code.** Everything under `*/templates/` and `*/references/` is
 payload copied into _other_ repositories.
 
