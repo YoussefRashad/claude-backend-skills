@@ -201,7 +201,7 @@ claude-backend-skills/
 │       ├── version.json
 │       ├── docs/                CLAUDE.md · 03-project-architecture · known-deviations
 │       ├── agents/              reviewer · docs-sync
-│       ├── src/                 16 working TypeScript files (4 of them specs)
+│       ├── src/                 16 working TypeScript files (3 of them specs)
 │       └── ci/                  GitHub Actions workflow — the 04 Part A gates
 ├── toolchain-config/
 │   ├── SKILL.md
