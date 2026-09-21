@@ -6,14 +6,29 @@ Shared Claude Code skills for backend engineering. Internal.
 Head of Backend Engineering. Changes to the standards, the source templates or the toolchain
 baseline go through review — see [`.github/CODEOWNERS`](.github/CODEOWNERS).
 
+**Team standards** — opinionated, NestJS-specific, authored and maintained here:
+
 | Skill                                     | Version | What it does                                                                                                                                            |
 | ----------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`backend-standards`](backend-standards/) | 2.0.0   | Scaffolds a new backend service on the team standards, or brings an existing one onto them. Ships the standards as files plus working source templates. |
+| [`backend-standards`](backend-standards/) | 2.0.1   | Scaffolds a new backend service on the team standards, or brings an existing one onto them. Ships the standards as files plus working source templates. |
 | [`toolchain-config`](toolchain-config/)   | 2.0.0   | ESLint, Prettier, tsconfig, Husky, lint-staged — one reviewed baseline.                                                                                 |
 
-**They are a pair.** `backend-standards` deliberately does not ship lint or compiler config —
-that belongs to `toolchain-config`, because two skills shipping the same eslint config is
-how the two copies drift apart. Install both.
+**These two are a pair.** `backend-standards` deliberately does not ship lint or compiler
+config — that belongs to `toolchain-config`, because two skills shipping the same eslint
+config is how the two copies drift apart. Install both (see `ADR-001`).
+
+**General-purpose** — framework-agnostic, **vendored from Anthropic's skill set** and kept
+in upstream form (not authored here):
+
+| Skill                             | What it does                                                                                                |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`project-setup`](project-setup/) | Generates Claude Code docs + reviewer/docs-sync agents for any backend repo, from the actual code.          |
+| [`pr-review`](pr-review/)         | Multi-lane review of one PR/diff — automated security/dependency/secret scans plus a quality pass.          |
+| [`audit`](audit/)                 | Full-codebase security safety-net; persists a trackable report. The backstop when a PR skipped `pr-review`. |
+
+These three overlap in places with `backend-standards` (which ships its own reviewer and
+docs-sync agents, and is what `project-setup` reverse-engineers). Use whichever fits — see
+`backend-standards/SKILL.md` § "Relationship to the other review skills".
 
 ---
 
@@ -24,6 +39,9 @@ git clone https://github.com/YoussefRashad/claude-backend-skills.git ~/claude-ba
 mkdir -p ~/.claude/skills
 cp -r ~/claude-backend-skills/backend-standards ~/.claude/skills/
 cp -r ~/claude-backend-skills/toolchain-config  ~/.claude/skills/
+cp -r ~/claude-backend-skills/project-setup     ~/.claude/skills/
+cp -r ~/claude-backend-skills/pr-review         ~/.claude/skills/
+cp -r ~/claude-backend-skills/audit             ~/.claude/skills/
 ```
 
 On Windows, `~/.claude/skills` is `C:\Users\<you>\.claude\skills\`.
@@ -33,6 +51,9 @@ Start a new Claude Code session and check they appear:
 ```
 /backend-standards
 /toolchain-config
+/project-setup
+/pr-review
+/audit
 ```
 
 If a skill does not show up, confirm `SKILL.md` sits directly inside its folder — not one
@@ -42,7 +63,7 @@ level deeper.
 
 ```bash
 cd ~/claude-backend-skills && git pull
-cp -r backend-standards toolchain-config ~/.claude/skills/
+cp -r backend-standards toolchain-config project-setup pr-review audit ~/.claude/skills/
 ```
 
 ---
@@ -158,9 +179,15 @@ claude-backend-skills/
 │       ├── agents/              reviewer · docs-sync
 │       ├── src/                 16 working TypeScript files (4 of them specs)
 │       └── ci/                  GitHub Actions workflow — the 04 Part A gates
-└── toolchain-config/
-    ├── SKILL.md
-    └── templates/               eslint · prettier · tsconfig · husky · security-scan
+├── toolchain-config/
+│   ├── SKILL.md
+│   └── templates/               eslint · prettier · tsconfig · husky · security-scan
+├── project-setup/               vendored from Anthropic — docs + agent scaffolding
+│   └── SKILL.md
+├── pr-review/                   vendored from Anthropic — per-PR multi-lane review
+│   └── SKILL.md
+└── audit/                       vendored from Anthropic — full-codebase safety net
+    └── SKILL.md
 ```
 
 ### Why source templates rather than descriptions

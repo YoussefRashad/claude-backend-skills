@@ -16,9 +16,19 @@ claude-backend-skills/
 ├── toolchain-config/           skill 2 — the canonical ESLint/Prettier/tsconfig baseline
 │   ├── SKILL.md                diff-and-ask workflow
 │   └── templates/              eslint · prettier · tsconfig · husky · security-scan
+├── project-setup/              vendored (Anthropic) — docs + agent scaffolding
+├── pr-review/                  vendored (Anthropic) — per-PR multi-lane review
+├── audit/                      vendored (Anthropic) — full-codebase safety net
 ├── scripts/check-versions.mjs  version-stamp guard (run by `npm run check` and CI)
 └── .github/workflows/ci.yml    format check + stamp guard for THIS repo
 ```
+
+The three `project-setup` / `pr-review` / `audit` skills are **vendored from Anthropic's
+general-purpose skill set**, not authored here: single `SKILL.md` files, prettier-ignored
+to stay faithful to upstream, and carrying no `version.json` stamp (the CI guard covers
+only `backend-standards` and `toolchain-config`). They are framework-agnostic and overlap
+with `backend-standards`' own reviewer/docs-sync agents — see § "Relationship to the other
+review skills" in `backend-standards/SKILL.md`.
 
 ## `backend-standards/`
 

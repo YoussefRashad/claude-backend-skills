@@ -1,3 +1,9 @@
 node_modules
 # Husky hook bodies are shell, not formattable by Prettier.
 toolchain-config/templates/husky/
+
+# Vendored from Anthropic's general-purpose skill set — kept in upstream form
+# so they can be re-synced. Reformatting them would diverge from source.
+project-setup/SKILL.md
+pr-review/SKILL.md
+audit/SKILL.md

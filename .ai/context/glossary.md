@@ -1,6 +1,8 @@
 # Glossary
 
-Terms used across both skills, including the ones whose names mislead.
+Terms used across the two authored skills, including the ones whose names mislead. (The
+three vendored skills — `project-setup`, `pr-review`, `audit` — bring their own upstream
+vocabulary and are not covered here.)
 
 ## The documents, by number
 
