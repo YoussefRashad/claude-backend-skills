@@ -1,0 +1,10 @@
+# Normalize to LF in the repository.
+* text=auto eol=lf
+
+# These are copied verbatim into other repositories and then executed or parsed by
+# tools that are line-ending sensitive. A CRLF checkout on a Windows machine, copied
+# into a project and run under sh, fails with "bad interpreter" or silently no-ops.
+toolchain-config/templates/husky/*   text eol=lf
+*.mjs                                text eol=lf
+*.ts                                 text eol=lf
+*.yml                                text eol=lf

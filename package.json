@@ -1,0 +1,15 @@
+{
+  "name": "claude-backend-skills",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared Claude Code skills for backend engineering. Tooling only — this package ships nothing; it exists so the templates can be checked rather than remembered.",
+  "scripts": {
+    "check": "npm run format:check && npm run check:versions",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:versions": "node scripts/check-versions.mjs"
+  },
+  "devDependencies": {
+    "prettier": "^3.5.3"
+  }
+}

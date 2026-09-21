@@ -1,0 +1,19 @@
+# Build & deps
+dist
+node_modules
+coverage
+
+# Lockfiles & generated
+package-lock.json
+yarn.lock
+
+# Certs & secrets (never format)
+cert
+env
+*.pem
+
+# Vendored from the backend-standards skill — formatted at source and re-synced
+# from it. Letting the project reformat them makes every future sync produce a
+# spurious diff, and a diff that is always noise is a diff nobody reads.
+.ai/standards/
+.claude/agents/

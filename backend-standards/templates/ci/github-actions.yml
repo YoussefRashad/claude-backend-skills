@@ -1,0 +1,133 @@
+# CI — the gates in 04 Part A, blocking.
+#
+# Copy to `.github/workflows/ci.yml`.
+#
+# 01 §18: lint, type check, unit tests, dependency vulnerability scan and secret scan
+# MUST run in CI on every pull request, and a merge MUST be blocked on them. This file
+# is the "MUST run" half. The "merge is blocked" half is a branch-protection setting in
+# the repository — a workflow that reports failure while merges proceed anyway is not a
+# gate. Enable "Require status checks to pass" on the default branch and select these
+# jobs, or the section is only half implemented.
+#
+# 01 §17: four testing rules (money state transitions, idempotency, authorization,
+# webhook signatures) become MUST once this file exists and the suite runs here.
+#
+# 01 §16: CI MUST install from the lockfile — `npm ci`, never `npm install`.
+#
+# Third-party actions are pinned to a major tag for readability. Pinning to a full
+# commit SHA is the hardened form (02 §11) and is worth doing once this stabilises.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # A1, A2, A3, A6, A7 — everything that needs the dependency tree installed.
+  build:
+    name: Lint · Types · Tests · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # 01 §16 — from the lockfile. `npm install` would silently resolve new
+      # versions, which makes the scan results below meaningless.
+      - name: Install
+        run: npm ci
+
+      - name: A1 · Lint
+        run: npm run lint
+
+      - name: A2 · Type check
+        run: npm run typecheck
+
+      - name: A6 · Format
+        run: npm run format:check
+
+      - name: A3 · Unit tests
+        run: npm test -- --ci --coverage
+
+      - name: A7 · Build
+        run: npm run build
+
+  # A4 — dependency vulnerabilities. Blocking on High/Critical (04 Part A).
+  dependencies:
+    name: Dependency scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: A4 · osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v2
+        with:
+          scan-args: |-
+            --lockfile=package-lock.json
+
+  # A5 — secrets. 02 §12: git history retains a leaked secret after it is deleted
+  # from the working tree, so the scan needs history, not just the tip.
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — a shallow clone hides the commit that leaked
+
+      - name: A5 · trufflehog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --results=verified,unknown
+
+  # Not a 04 gate — a boot check. Every gate above is static: a service can pass all
+  # of them and still throw on startup (a default import of a CommonJS package, a
+  # missing required env var, a provider the container cannot resolve). This catches
+  # that class before it reaches an environment.
+  #
+  # Fill in the env vars this service requires at boot, then delete this comment.
+  smoke:
+    name: Boot smoke test
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Start and probe
+        env:
+          ALLOWED_ORIGINS: ''
+          PORT: '3000'
+          # <add every other variable required at boot — 01 §15 fails loudly without them>
+        run: |
+          node dist/main.js &
+          pid=$!
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:3000/health/live" >/dev/null 2>&1; then
+              echo "booted"; kill $pid; exit 0
+            fi
+            if ! kill -0 $pid 2>/dev/null; then
+              echo "process exited during boot"; wait $pid; exit 1
+            fi
+            sleep 1
+          done
+          echo "did not become ready within 30s"; kill $pid; exit 1

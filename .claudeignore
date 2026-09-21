@@ -1,0 +1,15 @@
+# Dependencies and generated output
+node_modules/
+
+# Lockfile — large, and never worth reading into context
+package-lock.json
+
+# Secrets (none live here, but the skills' templates reference these paths and
+# this repo must never be the place someone learns the habit is optional)
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt

@@ -1,0 +1,50 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "declaration": false,
+    "noImplicitAny": false,
+    "removeComments": true,
+    "noLib": false,
+    "allowSyntheticDefaultImports": true,
+    // esModuleInterop MUST accompany allowSyntheticDefaultImports. On its own,
+    // allowSyntheticDefaultImports only silences the TYPE error on a default import —
+    // the emit still compiles `import x from 'cjs-pkg'` to `cjs_pkg_1.default(...)`,
+    // which is undefined for a plain CommonJS module that sets `module.exports = fn`
+    // (e.g. `compression`). The result type-checks, builds, and throws at boot. See
+    // the footgun note in SKILL.md.
+    "esModuleInterop": true,
+    // Windows and macOS resolve imports case-insensitively; Linux CI does not. Without
+    // this, a wrong-case import passes locally and fails only in the pipeline.
+    "forceConsistentCasingInFileNames": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "target": "ES2022",
+    // Keep legacy class-field semantics. ES2022 flips useDefineForClassFields to
+    // true by default, which breaks NestJS/TypeORM (decorated fields overwrite
+    // base props at runtime, entity hydration wiped to undefined). Pin false.
+    "useDefineForClassFields": false,
+    "sourceMap": true,
+    "allowJs": false,
+    "outDir": "./dist",
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+
+    // ---- PROJECT-SPECIFIC below — PRESERVE the target project's own values ----
+    // baseUrl + paths encode the project's import aliases. Do NOT overwrite them
+    // with this template's. Merge the canonical compilerOptions above INTO the
+    // existing file and leave baseUrl/paths as the project already has them.
+    "baseUrl": "./src",
+    "paths": {
+      "@/*": ["*"]
+    }
+  },
+  // include/exclude are also project-specific — preserve the existing ones.
+  //
+  // NOTE: specs are excluded from the BUILD on purpose, which is why the canonical
+  // `typecheck` script targets tsconfig.eslint.json instead — that project includes
+  // src/**/*.ts and test/**/*.ts, so test files are type-checked too. Running
+  // `tsc --noEmit -p tsconfig.json` silently skips every spec file.
+  "include": ["src/**/*", "src/**/*.json"],
+  "exclude": ["node_modules", "dist", "coverage", "**/*.test.ts", "**/*.spec.ts"]
+}

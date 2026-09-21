@@ -1,0 +1,45 @@
+# Code owners — claude-backend-skills
+#
+# Every pull request touching a path below automatically requests review from the
+# owner listed. Last matching pattern wins, so the specific rules sit at the bottom.
+#
+# NOTE: this file requests reviewers. It does not *block* a merge on its own.
+# To make code-owner review mandatory, enable branch protection on the default
+# branch with "Require review from Code Owners".
+
+# ── Default ───────────────────────────────────────────────────────────────────
+# Everything in this repository is authored and maintained by Youssef Farag Rashad,
+# Head of Backend Engineering, who also signs the owner-level decisions in 01, 02
+# and backend-standards/SKILL.md. GitHub handle:
+*                                       @YoussefRashad
+
+# ── Security floor ────────────────────────────────────────────────────────────
+# 02 records the logging posture and four owner-signed decisions. A change here
+# is a change to what the organisation permits to be stored, not a doc edit.
+/backend-standards/references/02-security-and-compliance.md   @YoussefRashad
+
+# ── Engineering standards ─────────────────────────────────────────────────────
+# Rule strength (MUST vs SHOULD) and the backward-compatibility section propagate
+# into every service scaffolded from this repo.
+/backend-standards/references/01-engineering-standards.md     @YoussefRashad
+/backend-standards/references/00-ai-agent-instructions.md     @YoussefRashad
+
+# ── Source templates ──────────────────────────────────────────────────────────
+# These are copied verbatim into new services. A defect here ships everywhere,
+# and the money utility in particular is the one nobody re-derives by hand.
+/backend-standards/templates/src/                             @YoussefRashad
+
+# ── Toolchain baseline ────────────────────────────────────────────────────────
+# Changing the canonical lint or compiler config affects every repo that syncs.
+/toolchain-config/templates/                                  @YoussefRashad
+
+# ── CI gate template ──────────────────────────────────────────────────────────
+# Copied into every new service as its .github/workflows/ci.yml. A weakened gate
+# here weakens 04 Part A everywhere it lands.
+/backend-standards/templates/ci/                              @YoussefRashad
+
+# ── This repository's own guards ────────────────────────────────────────────
+# The format check and the version-bump guard are what stop the stamps and the
+# template formatting from drifting back to being enforced by memory.
+/scripts/                                                     @YoussefRashad
+/.github/workflows/                                           @YoussefRashad

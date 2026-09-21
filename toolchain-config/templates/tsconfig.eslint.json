@@ -1,0 +1,14 @@
+{
+  // The "everything that must compile" project: application source AND tests.
+  //
+  // Used by two things, deliberately the same two:
+  //   1. the type-aware ESLint layer (eslint.config.mjs)
+  //   2. the canonical `typecheck` script
+  //
+  // tsconfig.json excludes specs because they are not part of the build. Pointing the
+  // type check at that project instead would leave every test file unchecked while
+  // still reporting a passing gate.
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["dist"]
+}

@@ -1,0 +1,47 @@
+# CI for the skills repository itself.
+#
+# This repo ships no code, so there is nothing to lint or test — but two invariants it
+# states about itself were previously enforced by memory alone:
+#
+#   1. "Keep the source templates prettier-clean against the canonical .prettierrc."
+#      An unformatted template means every new project starts with a failing
+#      format:check, and the person who hits it has no idea why.
+#
+#   2. "Bump templates/version.json whenever you change anything a project would
+#      receive." Propagation is pull-based, so a stamp that does not move makes every
+#      downstream project report current when it is not.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Format · Version stamps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The bump check diffs against the base branch, which a shallow clone lacks.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Templates are prettier-clean
+        run: npm run format:check
+
+      - name: Version stamps moved with shipped content
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+        run: node scripts/check-versions.mjs
