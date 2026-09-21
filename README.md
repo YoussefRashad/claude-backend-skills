@@ -20,7 +20,7 @@ how the two copies drift apart. Install both.
 ## Install
 
 ```bash
-git clone <this-repo-url> ~/claude-backend-skills
+git clone https://github.com/YoussefRashad/claude-backend-skills.git ~/claude-backend-skills
 mkdir -p ~/.claude/skills
 cp -r ~/claude-backend-skills/backend-standards ~/.claude/skills/
 cp -r ~/claude-backend-skills/toolchain-config  ~/.claude/skills/
