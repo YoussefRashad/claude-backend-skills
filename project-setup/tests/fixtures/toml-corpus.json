@@ -1,0 +1,385 @@
+{
+ "$comment": "TOML conformance corpus. 'expect' was produced by Python 3.12 tomllib (valid/invalid); date/time cases are 'unsupported' by design: tomllib accepts them, project-setup's validator must not pass them.",
+ "cases": [
+  {
+   "name": "esc_q_multiline",
+   "toml": "a = \"\"\"\nx \\q\n\"\"\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "esc_q_basic",
+   "toml": "a = \"x \\q\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "esc_valid_all",
+   "toml": "a = \"\\b\\t\\n\\f\\r\\\"\\\\\\u00e9\\U0001F600\"\n",
+   "expect": "valid"
+  },
+  {
+   "name": "esc_u_short",
+   "toml": "a = \"\\u12\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "esc_u_surrogate",
+   "toml": "a = \"\\uD800\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "line_ending_backslash",
+   "toml": "a = \"\"\"\nfoo \\\n   bar\"\"\"\n",
+   "expect": "valid"
+  },
+  {
+   "name": "line_ending_backslash_trailing_ws",
+   "toml": "a = \"\"\"\nfoo \\   \n   bar\"\"\"\n",
+   "expect": "valid"
+  },
+  {
+   "name": "backslash_space_not_eol",
+   "toml": "a = \"\"\"foo \\ bar\"\"\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "ml_unterminated",
+   "toml": "a = \"\"\"\nabc\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "ml_four_quotes",
+   "toml": "a = \"\"\"x\"\"\"\"\n",
+   "expect": "valid"
+  },
+  {
+   "name": "ml_five_quotes",
+   "toml": "a = \"\"\"x\"\"\"\"\"\n",
+   "expect": "valid"
+  },
+  {
+   "name": "ml_six_quotes",
+   "toml": "a = \"\"\"x\"\"\"\"\"\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "ml_literal_ok",
+   "toml": "a = '''\nC:\\path \\q\n'''\n",
+   "expect": "valid"
+  },
+  {
+   "name": "basic_newline",
+   "toml": "a = \"x\ny\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "literal_newline",
+   "toml": "a = 'x\ny'\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "control_char",
+   "toml": "a = \"x\u0001y\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "tab_ok",
+   "toml": "a = \"x\ty\"\n",
+   "expect": "valid"
+  },
+  {
+   "name": "ml_control",
+   "toml": "a = \"\"\"x\u0007\"\"\"\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "int_leading_zero",
+   "toml": "a = 01\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "int_double_underscore",
+   "toml": "a = 1__2\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "int_leading_underscore",
+   "toml": "a = _1\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "int_trailing_underscore",
+   "toml": "a = 1_\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "int_ok_underscore",
+   "toml": "a = 1_000\n",
+   "expect": "valid"
+  },
+  {
+   "name": "hex_ok",
+   "toml": "a = 0xDEAD_beef\n",
+   "expect": "valid"
+  },
+  {
+   "name": "hex_signed",
+   "toml": "a = +0x1\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "hex_empty",
+   "toml": "a = 0x\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "oct_bad_digit",
+   "toml": "a = 0o8\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "bin_ok",
+   "toml": "a = 0b1010\n",
+   "expect": "valid"
+  },
+  {
+   "name": "float_ok",
+   "toml": "a = 6.626e-34\n",
+   "expect": "valid"
+  },
+  {
+   "name": "float_trailing_dot",
+   "toml": "a = 1.\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "float_leading_dot",
+   "toml": "a = .5\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "float_exp_missing",
+   "toml": "a = 1e\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "float_inf",
+   "toml": "a = -inf\n",
+   "expect": "valid"
+  },
+  {
+   "name": "float_nan",
+   "toml": "a = +nan\n",
+   "expect": "valid"
+  },
+  {
+   "name": "float_underscore_dot",
+   "toml": "a = 1_.5\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "plus_zero",
+   "toml": "a = +0\n",
+   "expect": "valid"
+  },
+  {
+   "name": "neg_leading_zero_float",
+   "toml": "a = -01.5\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "num_then_garbage",
+   "toml": "a = 12abc\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "arr_trailing_comma",
+   "toml": "a = [1, 2,]\n",
+   "expect": "valid"
+  },
+  {
+   "name": "arr_missing_comma",
+   "toml": "a = [1 2]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "arr_multiline_comments",
+   "toml": "a = [\n  1, # one\n  2,\n]\n",
+   "expect": "valid"
+  },
+  {
+   "name": "arr_nested_mixed",
+   "toml": "a = [[1], ['x'], {b = 1}]\n",
+   "expect": "valid"
+  },
+  {
+   "name": "arr_unclosed",
+   "toml": "a = [1, 2\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "arr_leading_comma",
+   "toml": "a = [,1]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "arr_empty",
+   "toml": "a = []\n",
+   "expect": "valid"
+  },
+  {
+   "name": "arr_double_comma",
+   "toml": "a = [1,,2]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "inline_ok",
+   "toml": "a = {b = 1, c.d = 'x'}\n",
+   "expect": "valid"
+  },
+  {
+   "name": "inline_trailing_comma",
+   "toml": "a = {b = 1,}\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "inline_newline",
+   "toml": "a = {b = 1,\n c = 2}\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "inline_extend",
+   "toml": "a = {b = 1}\na.c = 2\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "inline_extend_header",
+   "toml": "a = {b = 1}\n[a.c]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "dup_key",
+   "toml": "a = 1\na = 2\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "dup_quoted_key",
+   "toml": "a = 1\n\"a\" = 2\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "dotted_then_header",
+   "toml": "[x]\na.b = 1\n[x.a]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "header_then_dotted",
+   "toml": "[x.a]\nb=1\n[x]\na.c = 1\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "subtable_after_dotted",
+   "toml": "[f]\napple.color = 'red'\n[f.apple.texture]\nsmooth = true\n",
+   "expect": "valid"
+  },
+  {
+   "name": "table_twice",
+   "toml": "[a]\n[a]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "implicit_then_explicit",
+   "toml": "[a.b]\n[a]\nc = 1\n",
+   "expect": "valid"
+  },
+  {
+   "name": "aot_ok",
+   "toml": "[[p]]\nn = 1\n[[p]]\nn = 2\n",
+   "expect": "valid"
+  },
+  {
+   "name": "aot_static_conflict",
+   "toml": "p = []\n[[p]]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "table_on_value",
+   "toml": "a = 1\n[a]\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "empty_key",
+   "toml": "= 1\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "bare_key_space",
+   "toml": "a b = 1\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "key_no_value",
+   "toml": "a =\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "header_trailing_garbage",
+   "toml": "[a] x\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "value_trailing_garbage",
+   "toml": "a = \"x\" y\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "comment_ok",
+   "toml": "a = 1 # c\n# only\n",
+   "expect": "valid"
+  },
+  {
+   "name": "bool_case",
+   "toml": "a = True\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "quoted_empty_key",
+   "toml": "\"\" = 1\n",
+   "expect": "valid"
+  },
+  {
+   "name": "multiline_key",
+   "toml": "\"\"\"a\"\"\" = 1\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "crlf_ok",
+   "toml": "a = 1\r\nb = 2\r\n",
+   "expect": "valid"
+  },
+  {
+   "name": "bare_cr",
+   "toml": "a = 1\rb = 2\n",
+   "expect": "invalid"
+  },
+  {
+   "name": "dotted_whitespace",
+   "toml": "a . b = 1\n",
+   "expect": "valid"
+  },
+  {
+   "name": "date_local",
+   "toml": "a = 1979-05-27\n",
+   "expect": "unsupported"
+  },
+  {
+   "name": "datetime",
+   "toml": "a = 1979-05-27T07:32:00Z\n",
+   "expect": "unsupported"
+  },
+  {
+   "name": "time",
+   "toml": "a = 07:32:00\n",
+   "expect": "unsupported"
+  }
+ ]
+}
