@@ -1,350 +1,177 @@
 ---
 name: project-setup
-description: Set up Claude Code documentation structure, reviewer agent, and docs-sync agent for any backend project. Detects stack automatically and generates tailored files. Treats the codebase as sensitive by default (fintech-grade), enforces a plan-and-confirm gate before writing, and never reads secrets.
+description: Set up, migrate, or update shared AI-agent scaffolding for a backend repository so Claude Code and Codex work from the same rules - AGENTS.md as the shared source of truth, CLAUDE.md importing it, shared reviewer and docs-sync agents with thin per-tool wrappers, secret-path protection for both tools, and project docs generated from the actual code. Use this whenever the user wants to set up, install, initialize, re-run, upgrade, or migrate project setup, AGENTS.md, CLAUDE.md, agent docs, or reviewer/docs-sync agents in a repo, including repos already configured by the older Claude-only project-setup (v1), repos with hand-written CLAUDE.md or AGENTS.md, and new or empty repos. Treats the codebase as sensitive (fintech-grade), never reads secrets, enforces plan-and-confirm gates, and changes documentation and agent configuration only.
 ---
 
-# Project Setup — Documentation & Agent Scaffolding
+# project-setup v2
 
-> **When to use:** an existing backend repo that has no Claude Code docs/agents yet. Invoke with `/project-setup`, or "set up claude docs for this repo". Optional; nothing else here depends on it.
-
-Set up the full Claude Code configuration for a backend project: documentation structure, reviewer agent, docs-sync agent, `CLAUDE.md`, and settings — all generated from the **actual code**, never from templates.
-
-## Prerequisites
-
-- Must be run from the root of a git repository.
-- The project should have source code to analyze (not an empty repo).
-
-## Critical Rules (read first — these override everything below)
-
-1. **NEVER read secret files.** No `.env`, `.env.*`, `**/.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `**/secrets/**`, `**/credentials/**`, `**/.aws/**`, `**/.ssh/**`. Derive environment variables from `ConfigModule`/`ConfigService`, validation schemas (Joi/Zod/`class-validator`/env parsers), `*.config.ts`, `docker-compose.yml`, or `.env.example` **only**.
-2. **NEVER overwrite existing docs.** If `docs/`, `README.md`, `CLAUDE.md`, or any target file exists, READ it first, MERGE additions, and ASK before replacing.
-3. **NEVER invent unverifiable information.** If unsure, put it in `TODO.md` — do not guess. Every inferred fact must be labeled as inferred.
-4. **Read incrementally.** Do not load the whole codebase. Read only what each phase requires, then move on. Prefer directory listings and targeted reads over bulk file loads.
-5. **Treat the codebase as sensitive by default.** Assume fintech/PII/compliance context unless the user says otherwise.
-
----
-
-## PHASE 0 — Planning (DO THIS FIRST, THEN STOP)
-
-Read **only** these:
-
-- `package.json` (or the language's manifest — see Step 1 table)
-- `tsconfig.json` (or equivalent config)
-- `README.md` (if exists)
-- `docker-compose.yml` (if exists)
-- `src/` directory listing — **tree only, do not read file contents yet**
-- `app.module.ts` / `main.ts` (or the framework's entrypoint)
-
-Then present this summary and **STOP**:
+One skill, one source, two tools. Produces a repository layout that Claude Code and Codex both follow:
 
 ```
-## Project Understanding
-- Project name / Framework (version) / Language (version)
-- ORM (version) / Database / Cache / Queue / Auth
-
-## Modules Found
-- module/ — (inferred responsibility)
-
-## External Integrations Detected
-- service (source: package.json dep / import path)
-
-## Assumptions
-## Unknowns (need to read more code)
-
-## Execution Plan
-I will create N files in this order: ...
+AGENTS.md                      shared rules (canonical, <=150 lines, managed blocks)
+CLAUDE.md                      @AGENTS.md + Claude-only notes
+<dir>/AGENTS.md + CLAUDE.md    optional local rules next to sensitive code (always as a pair)
+.ai/manifest.json              install state: version, ownership, hashes (written last, by apply.mjs)
+.ai/agents/{reviewer,docs-sync}.md   canonical agent definitions
+.ai/context/*.md  .ai/decisions/     navigation maps and evidenced decisions
+docs/*.md                      conventions, database, integrations, observability
+.claude/settings.json          managed Read/command denies merged into user settings
+.claude/agents/*.md            Claude wrappers -> .ai/agents/*
+.codex/agents/*.toml           Codex wrappers  -> .ai/agents/*
+TODO.md                        everything uncertain, unverified, or out of scope
 ```
 
-**HARD STOP. Wait for explicit user confirmation before Phase 1.** Do not create directories or files during Phase 0.
+Read this file fully, then read references only when the step says so.
 
----
+## Non-negotiable rules
 
-## Step 1 — Detect Stack (during Phase 0)
+1. **Documentation and agent configuration only.** Never change application code, tests, dependencies,
+   migrations, schema, infrastructure, or CI/CD. Findings go to `TODO.md`. `scripts/apply.mjs` enforces a write
+   allowlist; do not write project files any other way.
+2. **Never read secrets.** No tool, command, or script you write may open a path matched by
+   `data/secret-paths.json` (`.env`, `.env.*` including `.env.example`, keys, certs, `secrets/`, `credentials/`,
+   `.npmrc`, the run vault). Env variable **names** come from config/validation code or from
+   `scripts/env-keys.mjs` (names and value classification only). Read diffs and history only through
+   `.ai/tools/git-safe.mjs` (or `assets/tools/git-safe.mjs` before it is installed), never raw `git diff/log -p/show`. If a value surfaces anyway:
+   do not repeat it, do not store it, report file and variable name only.
+   Files listed under `contentRisk` (compose files, config modules, k8s/helm) may be read for structure; never
+   reproduce values from them.
+3. **Nothing is overwritten silently.** All content goes to drafts first, is reviewed as a diff, and is applied by
+   `apply.mjs commit`, which re-verifies every file and writes the manifest last. The skill owns only managed
+   blocks (Markdown and `#`-comment files), managed keys (`.claude/settings.json`), and files it created in full.
+   Everything else belongs to the user and is merged, never replaced.
+4. **Evidence or nothing.** Never invent architecture, business rules, ADR rationale, security controls, or
+   behaviour. Label inferences *inferred*. Dependency presence is not evidence of a decision. Gaps go to `TODO.md`.
+5. **Generated is not verified.** The report distinguishes *generated*, *statically validated*, and *verified at
+   runtime in <tool>*. A security control is claimed only for the paths, tools, and version actually tested.
+   A model refusing to read a file is not proof the file is protected.
+6. **Read incrementally.** Listings and targeted reads; never bulk-load the codebase.
+7. **No retry recommendation without verified idempotency**, in any generated doc.
+8. **Project scope only.** Never write user-level or managed config (`~/.claude/settings.json`,
+   `~/.codex/config.toml`, `requirements.toml`, managed settings). Produce reviewed snippets for the user instead.
+   Installing the skill itself (`install/install.mjs`) is the only user-level write, and it is a separate,
+   explicit step.
+9. **No git state changes.** Never commit, push, stash, reset, restore, checkout, or clean.
 
-| File                                  | Detects                                                                                |
-| ------------------------------------- | -------------------------------------------------------------------------------------- |
-| `package.json`                        | Node.js: NestJS/Express/Fastify, TypeORM/Prisma/Sequelize, Jest/Vitest, BullMQ/ioredis |
-| `tsconfig.json`                       | TypeScript version, module system, target, path aliases                                |
-| `requirements.txt` / `pyproject.toml` | Python: Django/Flask/FastAPI, SQLAlchemy/Tortoise                                      |
-| `go.mod`                              | Go: Gin/Echo/Fiber, GORM                                                               |
-| `Gemfile`                             | Ruby: Rails, ActiveRecord                                                              |
-| `pom.xml` / `build.gradle`            | Java: Spring Boot, Hibernate                                                           |
-| `docker-compose.yml`                  | Databases (PostgreSQL, MySQL, Redis, MongoDB), message brokers                         |
-| `.env.example`                        | Environment variables and services used (read this, never `.env`)                      |
+## Scripts
 
-Also record: package manager (which lockfile actually exists), Node/runtime version (`engines`, `.nvmrc`, `Dockerfile`), and whether a linter/formatter is configured.
+All scripts are zero-dependency Node (>=18) and print JSON. Run them from the repository root as
+`node "<SKILL_DIR>/scripts/<name>.mjs" …`, where `<SKILL_DIR>` is the directory containing this file.
 
----
+| Script | Purpose |
+|---|---|
+| `detect.mjs` | Read-only inventory: mode + evidence, instruction files, tool configs, secret paths (names only), installs, tool versions |
+| `env-keys.mjs` | `keys`/`merge` for `.env.example`-style templates without exposing values |
+| `render-permissions.mjs` | Renders Claude denies, Codex profile snippet, git pathspec excludes from `data/secret-paths.json` |
+| `merge-claude-settings.mjs` | Order-preserving merge of managed entries into `.claude/settings.json` (draft + report) |
+| `blocks.mjs` | `check`/`hashes`/`drift`/`upsert` managed blocks (upsert writes drafts only) |
+| `lock.mjs` | One run per checkout; breaking a lock is a user decision |
+| `apply.mjs` | `init`/`prepare`/`commit`/`status`/`rollback`/`cleanup`: the only writer |
+| `validate.mjs` | Static checks: JSON shape, TOML syntax, sizes, imports, references, markers, drift, secret-shaped content (exit 1 on any failure) |
+| `canary.mjs` | Runtime measurement of secret-read protection per tool layer (no canaries = INCONCLUSIVE, exit 3) |
+| `secret-scan.mjs` | Optional local gitleaks scan, redacted; findings as file:line:rule only |
+| `assets/tools/git-safe.mjs` | Installed into projects: diff/log/show with secret excludes, no shell |
 
-## Step 2 — Scan Codebase (after approval)
+## Workflow
 
-Explore the source directory to map:
+Use a run id like `ps-<yyyymmdd>-<4 random chars>` for the whole run.
 
-- **Modules/packages:** what exists, dependencies between them
-- **Entities/models:** tables and relationships (flag anything money/balance/points/PII)
-- **Controllers/routes:** endpoints and grouping, API versioning scheme
-- **Services:** business logic layer
-- **Integrations:** external API clients, HTTP services, retry/timeout config
-- **Guards/middleware/interceptors:** auth, validation, rate limiting, logging
-- **Config:** how configuration is loaded and validated
+### Phase 0 — Discover (read-only), then STOP
 
----
-
-## PHASE 1 — Directory Structure & Security/Config (after approval)
-
-### 1a — Create directories
-
-```
-.claude/agents/
-.ai/decisions/
-.ai/context/
-docs/business-rules/
-docs/integrations/
-```
-
-### 1b — `.claude/settings.json`
-
-Read `package.json` scripts and build `allow` from **actual** scripts + safe git commands. Use this **explicit, literal** deny list (do not soften it):
-
-```json
-{
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "permissions": {
-    "allow": ["Bash(git status)", "Bash(git diff *)", "Bash(git log *)", "Bash(git branch *)"],
-    "deny": [
-      "Read(.env)",
-      "Read(.env.*)",
-      "Read(**/.env)",
-      "Read(**/.env.*)",
-      "Read(**/*.pem)",
-      "Read(**/*.key)",
-      "Read(**/*.p12)",
-      "Read(**/*.pfx)",
-      "Read(**/*.crt)",
-      "Read(**/*.cer)",
-      "Read(**/id_rsa*)",
-      "Read(**/secrets/**)",
-      "Read(**/credentials/**)",
-      "Read(**/.aws/**)",
-      "Read(**/.ssh/**)",
-      "Read(**/.gnupg/**)",
-      "Read(**/*.keystore)",
-      "Read(**/*.jks)",
-      "Bash(rm -rf *)",
-      "Bash(docker rm *)",
-      "Bash(docker rmi *)",
-      "Bash(DROP DATABASE *)",
-      "Bash(DROP TABLE *)",
-      "Bash(TRUNCATE *)",
-      "Bash(psql * -c DROP *)",
-      "Bash(curl * | bash)",
-      "Bash(curl * | sh)",
-      "Bash(wget * | bash)",
-      "Bash(npm publish *)",
-      "Bash(git push --force *)",
-      "Bash(git push -f *)",
-      "Bash(kubectl delete *)",
-      "Bash(terraform destroy *)"
-    ]
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "command": "<lint-fix-cmd> \"$CLAUDE_FILE_PATH\" 2>/dev/null || true"
-      }
-    ]
-  }
-}
-```
-
-Only include the hook if a linter is actually installed; substitute the real command (e.g. `npx eslint --fix`, `ruff --fix`, `gofmt -w`). Add actual npm scripts (`dev`, `build`, `test`, `lint`, `migration:*`) to `allow`.
-
-### 1c — `.claudeignore`
-
-Based on what **actually exists** (don't add non-existent entries):
-
-- `node_modules/`, `dist/`, `build/`, `coverage/`, `.turbo/`, `.next/`
-- `.env`, `.env.*`
-- The one lockfile that exists (`package-lock.json` OR `yarn.lock` OR `pnpm-lock.yaml`)
-- `*.pem`, `*.key`, `*.pfx`, `*.p12`, `*.crt`
-- IDE folders that exist (`.idea/`, `.vscode/`)
-- Logs, snapshots, generated files, migration snapshots
-
-### 1d — `.env.example`
-
-Derive vars from `ConfigModule`/`ConfigService`/validation schema — **not** from `.env`. Group by category (App, Database, Redis, Auth/JWT, External Integrations, Observability), add a one-line description per var, **no real values**. Mark required vs optional. If a var is referenced in code but absent from any schema, list it and note it in `TODO.md`.
-
-### 1e — Update `.gitignore` (append, never replace)
+1. `node scripts/detect.mjs`. Act on every warning before going further; tracked secret files or a held lock stop the run.
+   Its install list is a filesystem scan; confirm which `project-setup` copies are active from the running tool's own
+   skill list, and stop if more than one is active.
+2. Read every existing instruction file in full (`AGENTS.md`, `CLAUDE.md`, nested ones, `.claude/agents/*`,
+   `.codex/agents/*`), `README.md`, and existing `docs/`/`.ai/` indexes. Existing decisions outrank your inferences.
+3. Read only: the manifest (`package.json` or equivalent), lockfile name, `tsconfig.json`, `docker-compose.yml`
+   (structure only), `src/` tree listing, framework entrypoint (`main.ts`, `app.module.ts` or equivalent).
+   Versions: required range from the manifest, installed version from the lockfile; `tsconfig.json` describes
+   compiler settings, not the TypeScript version.
+4. Classify the mode with `references/modes.md`. If `migrate-v1`, also read `references/migration-v1.md`.
+5. Present this summary and **stop until the user explicitly approves**:
 
 ```
-# Claude Code personal settings
-.claude/settings.local.json
-CLAUDE.local.md
+## Mode: <mode>  (evidence: …)
+## Project
+- Name · framework (version) · language (version) · ORM · DB · cache/queue · auth
+- DB change policy as practiced: <ORM migrations | manual DDL | mixed> (evidence)
+## Existing AI configuration
+- files found, ownership guess, conflicts in meaning (not mere differences)
+## Tools & environment
+- Claude Code <version|not found> · Codex <version|not found> · OS/shell
+- Codex user config: legacy sandbox vs profiles (from detect) · Claude instruction-files mode
+## Security findings (names only)
+## Assumptions / Unknowns
+## Plan
+- files to create / merge / leave untouched, in order; commands proposed for allow-listing (with why each is safe)
 ```
 
----
+### Phase 1 — Draft (after approval)
 
-## PHASE 2 — Core Documentation
+1. `lock.mjs acquire --run-id <id> --agent <claude|codex>`, then `apply.mjs init --run-id <id>`.
+2. Generate content into `.ai/.run/<id>/drafts/<repo-path>` following `references/docs-generation.md` and the
+   templates in `assets/templates/`. For Markdown and `.gitignore`, write managed sections with
+   `blocks.mjs upsert` so user content outside the markers is preserved.
+3. Security tooling: copy `data/secret-paths.json` → `.ai/security-paths.json` and `assets/tools/git-safe.mjs` →
+   `.ai/tools/git-safe.mjs` as drafts (both `full` ownership; the agents and AGENTS.md depend on them).
+4. Agents: render `assets/agents/*.md` into `.ai/agents/` (replace `{{PROJECT_NAME}}`; remove references to docs
+   you did not generate). Copy wrappers from `assets/wrappers/` to `.claude/agents/` and `.codex/agents/`
+   (Codex file names: `reviewer.toml`, `docs_sync.toml`). Keep existing agent names other skills rely on
+   (e.g. `.claude/agents/reviewer.md`); check before renaming anything.
+5. Settings: `merge-claude-settings.mjs --run-id <id> [--allow-file <confirmed.json>]` (run it before prepare: it
+   writes `ownership.json`/`managed-keys.json`, which prepare embeds in the plan the user approves). Allow-list only commands
+   the user confirmed after you read what they execute (a `migration:*` script is never auto-allowed).
+   If it returns `needsDecision: true`, a managed deny may cancel a user exception (`Read(!…)`); those rules are
+   held back from the draft. Overlap is decided soundly: a rule is appended only if no path can match both it and
+   the exception (wildcards included); anything the check cannot model is deferred. Show the conflict; re-run with `--override-user-exceptions` only if the user chooses it.
+6. Env template: derive keys from config/validation code, then `env-keys.mjs merge`.
+7. Read `references/claude.md` and `references/codex.md` for tool-specific details before drafting wrappers,
+   settings, or snippets.
 
-### 2a — `CLAUDE.md` (**MAX 80 lines** — thin router using `@imports`)
+### Phase 2 — Review gate, then STOP
 
-```markdown
-# <project-name>
+1. `apply.mjs prepare --run-id <id> --mode <mode> --agents claude,codex`. It rejects (exit 3) any draft that
+   changes user content: anything outside managed blocks, a user-edited fully managed file, any pre-existing file the
+   skill does not own (only adding new blocks is free), or a `.claude/settings.json` draft that is not append-only. Show that diff; only if the user
+   explicitly approves it, re-run prepare with `--approve-user-content <path>[,<path>]` for exactly those files.
+2. Show each changed file as a diff (`git diff --no-index -- <target> .ai/.run/<id>/drafts/<target>`), the
+   settings merge report (conflicts, held-back rules, ineffective rules, legacy hooks), and the env-keys report
+   (names only). Never display vault files.
+3. Resolve every conflict with the user. Show the `planSha256` printed by prepare. **Stop until the user
+   approves the diff.** Do not edit drafts after this point; any change means a new prepare and a new approval.
 
-## Overview
+### Phase 3 — Apply and validate
 
-One line. See @.ai/context/project-tree.md for module map.
-See @.ai/context/glossary.md for terminology. See @.env.example for env vars.
+1. `apply.mjs commit --run-id <id> --approved-plan <planSha256>`. It re-checks the plan hash, every draft's
+   hash, `ownership.json`/`managed-keys.json`, every target, and the manifest. Exit 2: a run directory was
+   replaced by a link/junction; nothing was written. Exit 4: something changed since approval; nothing was
+   written; prepare and ask again (same run id is fine: no journal exists yet). Exit 5: partial apply; run
+   `apply.mjs rollback`. Exit 7: the run already wrote (committed, partial, or rolled back) or another run is
+   unresolved. A run writes at most once and its journal is never reset: finish recovery first, then retry with a
+   NEW run id. Rollback exit 6: some files were changed after
+   the run wrote them; they and their backups were left alone. Tell the user; never clean up without
+   `--confirm-manual-resolution` from them.
+2. `validate.mjs`. Fix failures through a new draft/prepare/commit cycle, or record them in `TODO.md`.
 
-## Stack
+### Phase 4 — Runtime verification (per tool, honestly scoped)
 
-<ACTUAL versions from manifest — no guessing>
+Follow `references/security.md`: load verification and the canary protocol for the tool you are running in.
+You cannot verify the other tool from this session; list the exact steps for the user and mark it *not verified*.
 
-## Architecture Decisions
+### Phase 5 — Report and release
 
-Do NOT suggest replacing decided technologies. See @.ai/decisions/ for rationale.
+Report with `references/report.md`, then `lock.mjs release`. Keep `.ai/.run/<id>` until the user confirms the
+result (rollback needs it), then `apply.mjs cleanup`.
 
-## Coding Rules
+## Reference index
 
-<inferred from ACTUAL code patterns — see @.ai/context/code-patterns.md>
-
-## DB Rules
-
-<actual ORM + migration approach>
-
-## Security — CRITICAL
-
-- NEVER log PII - NEVER expose secrets
-- Input validation on every endpoint - Parameterized queries only
-
-## API Standards
-
-See @docs/api-conventions.md
-
-## Commands
-
-<ACTUAL npm scripts>
-
-## Observability
-
-See @docs/observability.md
-```
-
-Keep it a router: detail lives in imported files, not here. If it exceeds 80 lines, move content out.
-
-### 2b — `.ai/context/` files (read from code, not templates)
-
-| File                   | Content                                                                                                              | How to generate                                                                                        |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `project-tree.md`      | Module map, dependencies, **flagged dangerous modules** (money/balance/payments/points/PII)                          | Walk `src/`, read each module's service + controller (not every file)                                  |
-| `glossary.md`          | Domain terms, enum values, service names, abbreviations                                                              | Extract from entity/enum/service names and comments                                                    |
-| `code-patterns.md`     | How controllers/services/repos/DTOs/factories/guards are structured                                                  | Read 2–3 real examples of each and document the convention                                             |
-| `error-contract.md`    | Error response shapes, exception filters, HTTP status mapping                                                        | Read exception filters, global pipes, error handlers. If inconsistent, propose one + note in `TODO.md` |
-| `critical-modules.md`  | Money/PII/auth modules with extra-scrutiny notes                                                                     | User's sensitive-areas answer + detected patterns                                                      |
-| `development-rules.md` | No unrelated changes; no schema change without migration; backward compat; prefer/reuse existing patterns & services | Infer from code style + linter config                                                                  |
-
----
-
-## PHASE 3 — Architecture & Integrations
-
-### 3a — ADRs in `.ai/decisions/`
-
-One ADR per major tech choice visible in code, plus a `README.md` index.
-
-```markdown
-# ADR-NNN: <decision>
-
-## Status: Accepted
-
-## Context: <why needed>
-
-## Decision: <what was chosen>
-
-## Alternatives Considered
-
-| Option | Pros | Cons |
-| ------ | ---- | ---- |
-
-## Consequences: <tradeoffs>
-```
-
-### 3b — `docs/observability.md`
-
-Document what **exists**: logging library + patterns, correlation/request IDs, metrics, health checks, log levels, PII redaction. Don't invent what should exist — gaps go to `TODO.md`.
-
-### 3c — `docs/api-conventions.md`
-
-Infer from controllers: URL/versioning patterns, response shapes, pagination, filtering, sorting, auth headers, rate limiting, standardized errors. Add a mermaid `sequenceDiagram` **only** where a complex flow genuinely needs it.
-
-### 3d — `docs/integrations/<vendor>.md` (one per external service)
-
-- What it does · Auth approach (no credentials) · Endpoints used
-- Error handling, retry, timeout, idempotency
-- Known quirks (from comments/workarounds in code)
-
-### 3e — `docs/business-rules/<flow>.md`
-
-One per major flow **only if the domain is clear enough**. Skip otherwise (log the gap in `TODO.md`). Never invent business rules.
-
----
-
-## PHASE 4 — Agents & Finalization
-
-### 4a — `.claude/agents/reviewer.md` (tailored to this stack)
-
-```markdown
----
-name: reviewer
-description: Security- and correctness-focused code reviewer for <project-name>.
-tools: Read, Grep, Glob, Bash
-model: opus
----
-
-Review dimensions:
-
-1. Security (stack-specific: guards/decorators, authz, JWT, input validation, injection, secret/PII leakage)
-2. Performance (N+1, unbounded queries, missing indexes, memory, blocking I/O)
-3. Correctness (edge cases, race conditions, idempotency, error handling)
-4. ORM/DB (entity conventions, migrations, isolation levels, read/write split)
-5. Integration layer (retries, timeouts, circuit breaking)
-6. Error handling & API conventions (matches error-contract.md)
-7. Maintainability
-8. <Domain section — money/credit/PII modules> when touched
-```
-
-### 4b — `.claude/agents/docs-sync.md`
-
-```markdown
----
-name: docs-sync
-description: Post-merge documentation sync for <project-name>.
-tools: Read, Grep, Glob, Bash, Edit, Write
-model: opus
----
-
-On merge: check git diff, update every affected doc from the table below.
-<Table of the docs actually generated>
-Rules: read before editing, preserve existing content, never invent, never commit.
-```
-
-### 4c — `TODO.md`
-
-Sections: **Needs Manual Review** (inferred-not-confirmed) · **Missing Information** (couldn't infer) · **Security Concerns** (found during scan) · **Inconsistencies** (pattern/naming/config deviations) · **Cleanup** (dead code, stale config, missing tests).
-
-### 4d — Report
-
-Present: (1) table of all files created with **line counts + Created/Merged/Skipped status**, (2) security concerns found, (3) codebase inconsistencies, (4) what needs manual review (→ `TODO.md`), (5) next steps (e.g. "review TODO.md", "run /audit for a full-codebase safety net").
-
----
-
-## Rules
-
-- **Never hard-code** project content into this skill — always detect from the codebase.
-- **Never read** secret files during setup (see Critical Rule 1).
-- **Plan-and-confirm gate is mandatory** — do not write anything before Phase 0 approval.
-- **Ask before overwriting** any existing file; default to merge.
-- **Label every inference** and route uncertainty to `TODO.md`.
-- **Match existing style** — if docs already exist, match their tone/format.
-- **Minimize** — skip files that would be empty/near-empty; skip `business-rules/` if the domain isn't clear.
-- **`CLAUDE.md` ≤ 80 lines** — it's a router, not a manual.
+| File | Read when |
+|---|---|
+| `references/modes.md` | Phase 0, always |
+| `references/migration-v1.md` | mode is `migrate-v1`, or v1 artifacts exist |
+| `references/docs-generation.md` | Phase 1, generating any doc |
+| `references/claude.md` | drafting `.claude/*`, CLAUDE.md, retiring v1 |
+| `references/codex.md` | drafting `.codex/*`, AGENTS.md sizing, Codex snippet |
+| `references/security.md` | secret handling, scanning, canaries, capability report |
+| `references/state-and-apply.md` | lock, drafts, manifest, ownership, recovery, concurrency |
+| `references/report.md` | Phase 5 |

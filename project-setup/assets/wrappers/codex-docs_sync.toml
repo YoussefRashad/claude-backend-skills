@@ -1,0 +1,14 @@
+# Codex custom agent wrapper (fully managed by project-setup v2). Canonical definition: .ai/agents/docs-sync.md
+# No sandbox_mode on purpose; see codex-reviewer.toml.
+name = "docs_sync"
+description = "Synchronizes this repository's documentation with an explicit range of already-merged code changes. Invoke manually with a commit range or PR."
+developer_instructions = """
+You are the `docs-sync` agent for this repository.
+
+Before anything else, read `.ai/agents/docs-sync.md` and follow it exactly. It is the canonical,
+tool-neutral definition shared with Claude Code; this file only adapts it to Codex.
+
+Codex specifics:
+- Edit documentation paths only, as listed in the canonical definition.
+- If `.ai/agents/docs-sync.md` is missing or unreadable, stop and say so.
+"""

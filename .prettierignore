@@ -1,3 +1,5 @@
 node_modules
+# project-setup is a verified release artifact (SHA256-pinned); formatting would change its bytes.
+project-setup/
 # Husky hook bodies are shell, not formattable by Prettier.
 toolchain-config/templates/husky/

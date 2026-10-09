@@ -1,0 +1,7 @@
+# Claude Code personal files
+.claude/settings.local.json
+CLAUDE.local.md
+# project-setup transient state (also self-ignored)
+.ai/.run/
+.ai/.canary/
+.ai/.setup.lock/

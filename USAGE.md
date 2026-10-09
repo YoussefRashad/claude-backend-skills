@@ -61,11 +61,11 @@ flowchart TD
 
 ## `project-setup`
 
-- **When:** an existing backend repo with no Claude Code docs/agents yet. Optional.
-- **How it runs:** a **plan-and-confirm gate** — it explores, then presents a plan and
-  **stops** for your approval before writing anything. Generates `CLAUDE.md`, `.ai/context`,
-  ADRs, reviewer + docs-sync agents, `.claude/settings.json`, and a `TODO.md`. Never reads
-  secret files; never invents facts (uncertain items go to `TODO.md`).
+- **When:** set up or migrate a backend repo for Claude Code and Codex (fresh, v1, hand-written, or
+  update). Shared `AGENTS.md`, `CLAUDE.md` importing it, shared `reviewer`/`docs-sync` agents.
+- **How it runs:** Phase 0 discovery, then a hard stop; drafts only; you approve the diff by its plan
+  hash; `commit` applies exactly that plan, with backups and a verified rollback. Never reads secret
+  files. Details and known limitations: `project-setup/README.md`, `project-setup/RELEASE-NOTES-2.0.0.md`.
 
 ## `pr-review` — per-PR gate
 

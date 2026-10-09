@@ -4,7 +4,9 @@
 
 Distribution repo for five backend-engineering Claude Code skills. Two are opinionated and
 NestJS-specific (`backend-standards`, `toolchain-config`); three are framework-agnostic
-(`project-setup`, `pr-review`, `audit` — single `SKILL.md` files, no version stamp).
+(`project-setup`, `pr-review`, `audit`). `pr-review` and `audit` are single `SKILL.md` files with no version
+stamp; `project-setup` is a versioned release (`project-setup/VERSION`, own installer and test suite) and is
+excluded from Prettier because its files are SHA256-pinned.
 **It ships no runtime code.** Everything under `*/templates/` and `*/references/` is
 payload copied into _other_ repositories.
 

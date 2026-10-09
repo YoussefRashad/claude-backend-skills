@@ -38,12 +38,23 @@ git clone https://github.com/YoussefRashad/claude-backend-skills.git ~/claude-ba
 mkdir -p ~/.claude/skills
 cp -r ~/claude-backend-skills/backend-standards ~/.claude/skills/
 cp -r ~/claude-backend-skills/toolchain-config  ~/.claude/skills/
-cp -r ~/claude-backend-skills/project-setup     ~/.claude/skills/
 cp -r ~/claude-backend-skills/pr-review         ~/.claude/skills/
 cp -r ~/claude-backend-skills/audit             ~/.claude/skills/
 ```
 
 On Windows, `~/.claude/skills` is `C:\Users\<you>\.claude\skills\`.
+
+`project-setup` (2.0.0, shared by Claude Code and Codex) is **not** copied with `cp`: it has its own
+installer, which verifies the copy, keeps backups and refuses to overwrite an older unversioned copy
+without consent. Retire v1 first (see `project-setup/references/claude.md` "Retiring v1"), then:
+
+```bash
+node ~/claude-backend-skills/project-setup/install/install.mjs --dry-run
+node ~/claude-backend-skills/project-setup/install/install.mjs            # add --replace-unversioned to replace a v1 copy (backed up)
+node ~/claude-backend-skills/project-setup/install/install.mjs verify
+```
+
+See `project-setup/README.md` and `project-setup/RELEASE-NOTES-2.0.0.md` (known limitations).
 
 Start a new Claude Code session and check they appear:
 
@@ -62,7 +73,8 @@ level deeper.
 
 ```bash
 cd ~/claude-backend-skills && git pull
-cp -r backend-standards toolchain-config project-setup pr-review audit ~/.claude/skills/
+cp -r backend-standards toolchain-config pr-review audit ~/.claude/skills/
+node project-setup/install/install.mjs && node project-setup/install/install.mjs verify
 ```
 
 ---
@@ -206,7 +218,7 @@ claude-backend-skills/
 ├── toolchain-config/
 │   ├── SKILL.md
 │   └── templates/               eslint · prettier · tsconfig · husky · security-scan
-├── project-setup/SKILL.md       general-purpose — docs + agent scaffolding
+├── project-setup/               general-purpose — shared Claude Code + Codex setup (2.0.0, own installer and tests)
 ├── pr-review/SKILL.md           general-purpose — per-PR multi-lane review
 └── audit/SKILL.md               general-purpose — full-codebase safety net
 ```
