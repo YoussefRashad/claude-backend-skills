@@ -96,31 +96,60 @@ every row of the table above attacker-controlled.
    that checkout.
 2. The code under review is a git ref: `refs/remotes/origin/<branch>`, or a PR ref fetched by the
    user (`git fetch origin pull/<n>/head:refs/review/<n>`; fetching is the user's action, not the
-   agent's).
+   agent's). Base and head refs resolve to commit IDs before review commands are built. The report
+   records both IDs and the review mode:
+   - Committed-head mode: `review-diff --base <ref> --head <ref>` compares the merge-base of the
+     resolved commits to the resolved head. The trusted checkout's staged, unstaged and untracked
+     content is not part of that review.
+   - Local-worktree mode: `review-diff --base <ref>` uses the resolved current HEAD as head and
+     compares the merge-base to the user's working tree, including the local changes in N5.
+     This mode is for the user's own branch.
 3. `git-safe.mjs` gains three read-only subcommands so the reviewer never needs the working tree of
    the reviewed branch:
 
-   | Subcommand                             | Prints                       | Secret check                                                                                               |
-   | -------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
-   | `cat <commit> -- <path>`               | file content at that commit  | path matched against the secret patterns (same glob engine as `scripts/globs.mjs`); match = refuse, exit 2 |
-   | `ls <commit> [-- <paths>]`             | tracked paths at that commit | secret paths omitted from the listing                                                                      |
-   | `grep <commit> <pattern> [-- <paths>]` | `git grep` on that tree      | secret pathspec excludes appended, as for `diff`                                                           |
+   | Subcommand                             | Prints                       | Secret check                   |
+   | -------------------------------------- | ---------------------------- | ------------------------------ |
+   | `cat <commit> -- <path>`               | File content at that commit  | Refuse a matching path, exit 2 |
+   | `ls <commit> [-- <paths>]`             | Tracked paths at that commit | Omit matching paths            |
+   | `grep <commit> <pattern> [-- <paths>]` | Matches in that tree         | Exclude matching paths         |
 
-   Rules that stay: every revision must resolve to a commit (R01); `rev:path` syntax stays blocked as
-   an _argument_. `cat` builds the `<commit>:<path>` object name itself after both checks pass, so the
-   bypass that R01 blocks is not reopened. Path checks reject absolute paths, `..`, NUL, and paths
-   that differ after normalisation (case-folded on Windows, matching the existing `icase` excludes).
+   All three, `diff` and `review-diff` use the A1/A6 policy grammar and shared matcher: literals,
+   `*`, `?`, `**`; unsupported syntax fails validation. Secret matching is case-insensitive on
+   every platform.
+
+   Path handling has three separate steps:
+   - Structural validation rejects absolute paths, `..` components, NUL and noncanonical path
+     forms such as `./` prefixes. It does not case-fold or rewrite a valid name.
+   - Secret matching checks the validated path case-insensitively.
+   - Git object lookup uses the original, exact-case path. Git listings are NUL-delimited;
+     whitespace, quoting and non-ASCII names are not parsed as line-delimited records.
+
+   Every revision must resolve to a commit (R01); `rev:path` syntax stays blocked as an argument.
+   `cat` builds `<resolved-commit>:<validated-path>` only after both checks pass.
+
+   Each subcommand has its own argument builder. Resolved commit IDs, never unchecked ref
+   strings, reach the content operation. Grep patterns follow `-e`; paths follow `--` where the
+   git subcommand accepts paths. `cat` uses `cat-file blob`, never `show`. No content operation
+   enables textconv or external diff. Invalid policy or a git failure is an error, not an empty
+   successful review.
+
+   An output size limit applies to these review commands, including diff output.
+   DECIDED 2026-10-15: the limit is 1 MiB (1,048,576 bytes) of output per invocation. Above it,
+   the command refuses the whole result, prints nothing partial, exits non-zero and tells the
+   caller to narrow the paths. A truncated review is never emitted.
 
 4. The canonical `reviewer.md` section 1 changes:
-   - Determine base and head refs first. If head is the current `HEAD` of the working tree, say so in
-     the report header ("instructions loaded from the branch under review: trusted only if you
-     authored it") and continue. This keeps the common "review my own branch" case working.
-   - Read changed code with `git-safe cat|grep|ls <head> ...`, not with the file tools, whenever head
-     is not the checked-out commit.
+   - Determine the review mode and resolved base/head IDs first, and record them in the header.
+   - If head is the current HEAD of the working tree, say so in the report header:
+     "instructions loaded from the branch under review: trusted only if you authored it".
+     This keeps the common "review my own branch" case working.
+   - Read changed code with `git-safe cat|grep|ls <resolved-head> ...`, not with file tools,
+     whenever head is not the checked-out commit.
+   - Use the orchestrator-provided diff file or stdout-only commands as specified in N5.
    - Never run `git checkout`, `git switch`, `gh pr checkout` or `git worktree add`.
 
-5. `docs-sync` is unchanged in principle (it edits the checked-out tree, so it only ever runs on the
-   user's own branch). Its definition gains the same "never check out" rule.
+5. `docs-sync` is unchanged in principle (it edits the checked-out tree, so it only ever runs on
+   the user's own branch). Its definition gains the same "never check out" rule.
 
 **What this does not solve, stated in the README:** a developer who checks out an untrusted branch
 and starts an agent session there has already given that branch control of the session. The skill
@@ -130,23 +159,48 @@ branch."
 
 **Not doing (from v2 backlog item 15):** installing `git-safe.mjs` out of tree and allow-listing it
 in user settings. Reason: with the trusted-checkout model it adds a cross-platform install path and a
-second copy to keep in sync, and without that model it protects one input of six. Open question for
-the reviewer of this design: is there a residual case where an out-of-tree copy still helps? If yes,
-it goes into part 2 as an optional installer flag, never a default.
+second copy to keep in sync, and without that model it protects one input of six.
+DECIDED 2026-10-15: no optional out-of-tree copy either; the trusted-checkout model covers the
+case, and a second copy is one more thing to keep in sync.
 
-**Migration.** `.ai/tools/git-safe.mjs` and `.ai/agents/reviewer.md` are `full` ownership; an update
-replaces them with no user approval. Projects that customised `reviewer.md` section 6 (for example
-contact-rewards-backend) keep section 6: the update merges sections 1-5 from the template and keeps
-section 6 byte for byte. TO VERIFY that the 2.0.0 apply engine supports this; if not, section 6
-moves to a separate `.ai/agents/reviewer.project.md` that the canonical file includes by reference.
+**Migration.** `.ai/tools/git-safe.mjs` and `.ai/agents/reviewer.md` retain `full` ownership.
+An unchanged installed file can receive a reviewed update without extra user-content approval.
+An edited `full` file is shown as a diff and requires explicit approval before replacement.
+VERIFIED in v2 source: `project-setup/scripts/apply.mjs:279` checks the installed hash and
+`:289` rejects an unapproved replacement.
+
+Project customisations, including an existing reviewer section 6, move to
+`.ai/agents/reviewer.project.md`. The canonical reviewer includes that file by reference.
+The migration shows the move and preserves the customisation text; it does not silently merge
+template sections into an edited `full` file. The project file is user content and is preserved
+on subsequent template updates.
+
+User-added Codex wrapper settings, including `default_permissions`, survive the migration and
+later updates. An edited wrapper remains subject to the `full`-file approval guard; preserving
+its settings does not silently waive that guard.
+
+Migration uses the existing draft/prepare/commit journal. Rollback restores the previous files and
+manifest, or removes newly created files, subject to the existing protection for later user edits.
 
 **Tests.**
 
-- R41 `cat` prints a normal file at a commit; refuses a secret path (direct, case variant on Windows,
-  `./` prefix, `a/../.env`); refuses a non-commit revision; refuses `rev:path` as an argument.
+- R41 `cat` prints a normal file at a commit; refuses a secret path, including case variants on
+  every platform; refuses `./` prefixes, `a/../.env`, non-commit revisions and `rev:path` arguments.
 - R42 `ls` omits secret paths; `grep` never returns a line from a secret path, including when the
   pattern matches only inside one.
 - R43 `cat` on a commit where a secret file was added and later removed still refuses that path.
+- R74 shared-policy parity across `cat`, `ls`, `grep`, `diff`, `review-diff` and every rendered
+  control; both anchors, all supported wildcards, mixed case and rejected unsupported syntax.
+  TO VERIFY host enforcement parity in Claude Code and Codex with the corresponding live cases.
+- R75 structural validation does not alter exact-case git lookup; NUL-delimited listings preserve
+  mixed-case, whitespace and non-ASCII names. Secret case variants remain denied.
+- R76 adversarial argument tests: leading-dash refs cannot inject options; leading-dash grep
+  patterns follow `-e`; paths cannot inject options; `cat` invokes `cat-file blob`; textconv and
+  external diff never run; malformed policy and git failures fail the review. Output exactly at
+  1 MiB passes; output above it is refused whole, with no partial output and a non-zero exit.
+- R77 edited `full` files require approval; reviewer customisations survive the approved move;
+  user-added Codex settings survive; rerun and rollback preserve the agreed ownership boundaries.
+- R90 in N5 covers both review modes and recorded commit IDs.
 - Live: reviewer on a trusted checkout reviews `refs/review/N` without touching the working tree
   (`git status` and `git stash list` identical before and after); the report header shows the
   self-review warning only when head equals HEAD.
@@ -165,33 +219,54 @@ project root".
 
 The 2.0.0 base list only contains `**/`-prefixed globs, so the base rules are not affected. The bug
 appears as soon as a project adds a root-relative path (A6 makes that a supported feature, so A1 and
-A6 ship together).
+A6 ship together). VERIFIED in `project-setup/data/secret-paths.json:4`.
 
 **Design.**
 
 - `security-paths.json` pattern entries gain `anchor`: `"any"` (default; glob must start with `**/`)
   or `"root"` (glob is relative to the repository root, no leading `/` in the file).
+- One shared policy grammar and matcher serves all consumers: literals, `*`, `?`, `**`.
+  Character classes, braces, escapes and other unsupported syntax fail validation. Matching is
+  case-insensitive on every platform.
 - Rendering:
 
-  | Consumer                                   | `anchor: any`                          | `anchor: root`                                       |
-  | ------------------------------------------ | -------------------------------------- | ---------------------------------------------------- |
-  | Claude `Read(...)`                         | `Read(**/x)` (as today)                | `Read(/x)`                                           |
-  | git pathspec                               | `:(exclude,glob,icase)**/x` (as today) | `:(exclude,glob,icase)x`                             |
-  | Codex snippet `:workspace_roots`           | `"**/x"`                               | `"x"` (TO VERIFY: workspace-root relative semantics) |
-  | `globs.mjs` match (A3 `cat`, detect, scan) | match at any depth                     | match from root only                                 |
+  | Consumer                         | `anchor: any`               | `anchor: root`           |
+  | -------------------------------- | --------------------------- | ------------------------ |
+  | Claude `Read(...)`               | `Read(**/x)`                | `Read(/x)`               |
+  | git pathspec                     | `:(exclude,glob,icase)**/x` | `:(exclude,glob,icase)x` |
+  | Codex snippet `:workspace_roots` | `"**/x"`                    | `"x"`                    |
+  | Shared matcher                   | Match at any depth          | Match from root only     |
+
+  These are the anchor forms. Each rendered control must preserve the shared grammar's
+  case-insensitive meaning, rather than assuming the host's native glob semantics are identical.
+  TO VERIFY: Codex workspace-root semantics and Claude/Codex case-insensitive enforcement, using
+  R44/R74 live parity cases. Static rendering alone is not runtime verification.
 
 - Schema validation: an `any` glob that does not start with `**/`, or a `root` glob that starts with
-  `/`, `**/`, `./` or contains `..`, is a validation failure.
+  `/`, `**/`, `./` or contains a `..` path component, is a validation failure.
 - `validate.mjs` adds a warning for user-owned `Read(...)`/`Edit(...)` deny rules in project
   settings that start with neither `**/`, `/`, `//` nor `~/`: "relative to the session's working
   directory, so it may not protect what it names". User rules are reported, never rewritten.
 
-**Migration.** contact-rewards-backend already has `Read(/env/**)` and `Read(/cert/**)` as user
-entries; after A6 they become managed entries rendered from `projectPatterns`, and the duplicate
-user entries are reported as "already covered" (not removed).
+**Migration.** The versioned v2-to-v3 policy migration assigns `anchor: any` to entries beginning
+with `**/` and `anchor: root` to entries without that prefix. Adding an anchor does not legalise
+an otherwise invalid glob. Other entry fields and other fields in the policy file are preserved.
 
-**Tests.** R44 rendering table above for both anchors; R45 schema rejects the invalid forms; R46
-validate warns on an unanchored user deny and stays silent on the four anchored forms.
+Entries are classified as added, modified or deleted against the installed v2 baseline, as
+specified in A6. Restoring a deleted base entry or replacing a modified one requires approval.
+The migration and any move to `projectPatterns` appear in the Phase 0 plan and require
+`--approve-user-content` for `.ai/security-paths.json`.
+
+contact-rewards-backend already has `Read(/env/**)` and `Read(/cert/**)` as user entries; after A6
+they are also represented by managed entries rendered from `projectPatterns`. The duplicate user
+entries are reported as "already covered" and are not removed. Rollback follows A6.
+
+**Tests.** R44 rendering table above for both anchors, with live host cases labelled TO VERIFY
+until measured; R45 schema rejects invalid anchors and unsupported grammar; R46 validate warns on
+an unanchored user deny and stays silent on the four anchored forms. R74 checks shared-policy
+parity and case-insensitive matching on every platform. R78 checks versioned anchor migration,
+preservation of other fields, baseline classification and approval before restoring or replacing
+a changed base entry.
 
 ---
 
@@ -207,24 +282,98 @@ forever ("differs from this skill version").
 
 **Design.**
 
-- `.ai/security-paths.json` gets two arrays: `patterns` (managed: copied from the skill, replaced on
-  update) and `projectPatterns` (user-owned, never touched by an update). Ownership of the file
-  becomes `keys`: `patterns` managed, `projectPatterns` user.
+- `.ai/security-paths.json` gets two arrays: `patterns` (managed) and `projectPatterns`
+  (user-owned). Ownership becomes `keys`, with an explicit schema for this file. Updates preserve
+  `projectPatterns` and other existing fields, except for the approved versioned migration below.
+- Ownership schemas are specific to each file; `keys` is not a generic permission to replace
+  arbitrary JSON:
+
+  | File                      | Managed data                                       | Preserved user data                |
+  | ------------------------- | -------------------------------------------------- | ---------------------------------- |
+  | `.ai/security-paths.json` | Versioned policy schema and `patterns` entries     | `projectPatterns` and other fields |
+  | `.claude/settings.json`   | Recorded permission entries and A2 hook identities | Other entries, options and order   |
+
+  Security-policy metadata records complete pattern entries, not arrays of permission strings.
+  Claude permission entries remain strings identified within their permission array. A managed
+  hook is identified by event, matcher and command together; command alone is insufficient.
+  User hook order and options are preserved. Prepare, commit and validate use the same per-file
+  schemas, including for ownership metadata embedded in the approved plan.
+
+  VERIFIED v2 limitation: `project-setup/scripts/apply.mjs:326` restricts `keys` ownership to
+  Claude settings; `:331` accepts managed-key metadata only as arrays of strings for that file.
+  These checks must be extended together.
+
 - Every consumer (render-permissions, git-safe, globs.mjs, detect, secret-scan) uses
-  `patterns + projectPatterns`, deduplicated by normalised glob.
-- `render-permissions.mjs` takes `--project <root>` and renders from the project file when it
-  exists; without it, from the skill file (Phase 0, before the project file exists).
-- `validate.mjs`: the "differs" warning is replaced by: fail if `patterns` differs from the skill's
-  list (managed content changed); pass with an info line listing `projectPatterns`.
-- Base list additions: `**/*.cert` and `**/.htpasswd` (generic; found in the first real migration).
+  `patterns + projectPatterns`, deduplicated by anchor and case-normalised glob. Existing fields
+  on entries are preserved; deduplication of effective matching does not discard source metadata.
+- All consumers share the A1 grammar and matcher: literals, `*`, `?`, `**`; unsupported syntax
+  fails validation; matching is case-insensitive on every platform.
+- `prepare` computes one effective, migrated pattern snapshot. Every rendered control for that
+  plan uses that same snapshot, including Claude denies, git exclusions and the Codex snippet.
+  The approved plan binds the policy, ownership metadata and rendered outputs together.
+  Changed inputs or outputs after approval require a new prepare and approval; commit must not
+  independently re-render from a different policy.
+- `render-permissions.mjs` takes `--project <root>` and renders from the project policy when it
+  exists; without it, from the skill policy for Phase 0. A Phase 0 rendering does not substitute
+  for prepare's migrated snapshot.
+- The manifest records the installed managed pattern list. `validate.mjs` compares the project's
+  `patterns` against that recorded list, not against the currently running skill's list:
+  - A mismatch with the recorded installed list fails as managed content edited.
+  - An unchanged older installed list reports "behind" when the current skill has a newer list.
+  - `projectPatterns` are validated and listed in an info line, not reported as managed drift.
+- The manifest records a hash of the last rendered Codex snippet. Validate renders from the
+  current effective policy and reports an info line if its hash differs because project patterns
+  changed. This reports a stale snippet; it does not claim that user-level Codex configuration
+  was installed, inspected or verified.
+- Base list changes: `**/.env` and `**/.env.*` are replaced by `**/.env*`, which also covers
+  names such as `.envrc` and `.env-prod` (debate D1); `**/*.cert` and `**/.htpasswd` are added
+  (generic; found in the first real migration). The change follows F6's migration and approval
+  rules. `.env.example` stays denied to agents and reachable only through N6's scripts. Excluded
+  files can hold review-relevant setup code (for example `.envrc`); that code needs human review.
 
-**Migration.** An update that finds extra entries in `patterns` moves them to `projectPatterns`. This
-changes a user-visible file, so it is listed in the Phase 0 plan and needs `--approve-user-content`
-for `.ai/security-paths.json` (one approval; the content is preserved, only moved).
+**Migration.** Use a versioned migration from the installed v2 policy to the v3 schema.
 
-**Tests.** R47 project additions appear in the rendered Claude denies, the Codex snippet and git-safe
-excludes; R48 an update moves stray `patterns` entries to `projectPatterns` only with approval; R49
-validate fails when managed `patterns` were edited, passes with additions in `projectPatterns`.
+- Compare entries with the installed v2 baseline and classify unchanged, added, modified and
+  deleted entries before proposing the new managed list.
+- An entry without a `**/` prefix gains `anchor: root`; a prefixed entry gains `anchor: any`.
+  Preserve other entry fields and file fields, including `contentRisk` and scan settings.
+- Extra project entries move from `patterns` to `projectPatterns`. Show the move in Phase 0 and
+  require `--approve-user-content` for `.ai/security-paths.json`.
+- Restoring a deleted base entry or replacing a modified one also requires approval. Do not
+  silently turn a modified entry into an addition and restore its former base entry.
+- Record approved omissions as in B5/B6 so later rendering does not repeatedly propose them.
+- Existing v2 managed allow entries are identified using their installed ownership metadata;
+  their removal follows A4 and is never an incidental effect of policy migration.
+- DECIDED 2026-10-15 (baseline): v2 records a file hash, not the pattern entries. v3 ships the
+  v2.0.0 base list as data, since 2.0.0 is the only v2 release. When the installed file's hash
+  matches no known shipped list, every entry is treated as modified and the plan asks about each.
+- DECIDED 2026-10-15 (changed glob): v2 entries have no stable ID, so a changed glob is a deletion
+  plus an addition. Both appear in the Phase 0 plan and need approval.
+- Apply the policy and dependent controls through the journaled prepare/commit flow. Rollback
+  restores the policy, rendered files and manifest together, subject to the existing guard
+  against overwriting later user edits.
+
+**Tests.**
+
+- R47 project additions appear in Claude denies, the Codex snippet and git-safe excludes.
+- R97 `.envrc`, `.env-prod`, nested paths and mixed-case variants are excluded by every consumer;
+  `.env.example` stays reachable only through N6's scripts.
+- R48 an update moves stray `patterns` entries to `projectPatterns` only with approval.
+- R49 validate fails when managed `patterns` differ from the installed manifest baseline and
+  passes with valid additions in `projectPatterns`.
+- R74 shared grammar, anchors and case-insensitive parity across every consumer and control.
+- R78 versioned migration preserves other fields, assigns anchors, classifies baseline changes
+  and requires approval for restoration/replacement. A changed glob is classified as deletion
+  plus addition; a file matching no shipped list has every entry treated as modified. Rollback
+  restores the inputs.
+- R79 per-file ownership schemas accept policy entries and composite hook identities, reject
+  metadata for the wrong file shape, and preserve user hook order, options and unrelated keys.
+- R80 one prepare snapshot feeds every rendering; changing the policy, metadata or outputs after
+  approval prevents commit. A migration cannot mix old git exclusions with new Claude denies.
+- R81 an unchanged older installed list reports "behind", not "edited"; changing the recorded
+  managed content produces the managed-drift failure.
+- R82 commit records the snippet hash; unchanged policy is quiet; changed project patterns
+  produce the stale-snippet info line without writing or claiming verification of user config.
 
 ---
 
@@ -240,34 +389,63 @@ instruction. Deny rules such as `Bash(git diff *)` match command text from the s
 
 - New managed file `.ai/tools/guard-raw-git.mjs`, wired as a Claude `PreToolUse` hook on
   `Bash|PowerShell` in the managed part of `.claude/settings.json`.
-- It reads the hook JSON from stdin, takes `tool_input.command`, splits it on shell separators
-  (`;`, `&&`, `||`, `|`, newline, `$(...)`, backticks) and, for each segment, finds a `git` executable
-  token (`git`, `git.exe`, a path ending in `/git` or `\git.exe`), skips global options
-  (`-C <x>`, `-c <x>`, `--no-pager`, `--git-dir=<x>`, `--work-tree=<x>`, `-P`, `--paginate`), and
-  blocks when the subcommand is one of `diff show log blame cat-file grep archive format-patch
-whatchanged`. Exit 2 with a one-line message pointing to `node .ai/tools/git-safe.mjs`.
-- `git status`, `git branch`, `git fetch`, `git rev-parse` and every `git-safe.mjs` call pass.
-- Fails open but loudly on unparseable input (N8): the command is allowed, and the hook exits 1
-  (Claude Code's non-blocking error code, whose stderr is shown to the user) with
-  `guard-raw-git: could not parse command; allowed without checking`. A parser bug therefore never
-  blocks all shell use and never goes unnoticed. TO VERIFY on Claude Code 2.1.29x: exit 1 on
-  PreToolUse lets the call proceed and surfaces stderr. The hook is a guardrail, and the README says
-  so with the known gaps: `sh -c "..."`, aliases, scripts that spawn git, `node -e`.
-- `merge-claude-settings.mjs` learns to merge one managed `hooks.PreToolUse` entry, identified by its
-  command string, without touching user hook entries (same keys-ownership rules as permissions).
+- The hook command uses a quoted, project-root-anchored script path, independent of the tool's
+  current directory. Candidate: `node "$CLAUDE_PROJECT_DIR/.ai/tools/guard-raw-git.mjs"`.
+  TO VERIFY through Claude Code on Windows shells in R83: project-root expansion, quoting,
+  launch from root/subdirectories, spaces, non-ASCII paths and the Node-missing failure.
+  This is a candidate command, not a verified portable spelling.
+- It reads hook JSON from stdin and takes `tool_input.command`. For PowerShell, remove backtick
+  escapes from segments before matching, so escaped executable and subcommand tokens cannot
+  evade the blocked list.
+- Split shell command text into segments using separators (`;`, `&&`, `||`, `|`, newline,
+  `$(...)` and shell backtick forms). For each segment, find a git executable token (`git`,
+  `git.exe`, a path ending in `/git` or `\git.exe`) and inspect its options and subcommand.
+  Recognised global options include `-C <x>`, `-c <x>`, `--no-pager`, `--git-dir=<x>`,
+  `--work-tree=<x>`, `-P` and `--paginate`.
+- Block these git subcommands:
+  `diff show log blame cat-file grep archive format-patch whatchanged stash reflog diff-tree
+range-diff`.
+  `stash` is blocked as a whole, every stash subcommand included. Also block any git invocation
+  that passes `-p` or `--patch` as an option token; the same characters inside a quoted argument
+  (for example a commit message) do not count. Block configuration overrides using `-c alias.*`.
+  These checks take precedence over skipping recognised global options.
+  Exit 2 with a one-line message pointing to `node .ai/tools/git-safe.mjs`.
+- `git status`, `git branch`, `git fetch` and `git rev-parse` pass when they do not meet the
+  blocking rules above. Commit, push and checkout are not added to this hook's blocked list:
+  the hook also serves the orchestrator. Reviewer instructions still forbid git state changes.
+  `git-safe.mjs` calls pass; a separate raw-git segment in the same shell command is still checked.
+- Fails open but loudly on unparseable input (N8): the hook exits 1 with the fixed stderr message:
+  `guard-raw-git: could not parse command; allowed without checking`.
+  TO VERIFY on Claude Code 2.1.29x in R51/R83: exit 1 on PreToolUse lets the call proceed and
+  surfaces stderr. This host behaviour is not established by testing the Node process alone.
+- The hook is a guardrail, and the README says so. Known gaps remain: `sh -c "..."`, aliases,
+  scripts that spawn git and `node -e`. PowerShell gaps include indirect or computed invocation,
+  dynamically constructed command names, script blocks and encoded commands. Backtick removal
+  does not make this a complete PowerShell parser.
+- `merge-claude-settings.mjs` merges the managed hook under the per-file ownership schema in A6.
+  Its identity is the tuple (event, matcher, command), not the command alone. Preserve user
+  hook order and options, including entries sharing a command under another event or matcher.
+  A rerun does not duplicate the managed hook.
 
 **Codex.** Not in rc.1. Project-level Codex hooks would need `.codex/config.toml`, which the skill
-does not write (user-owned). TO VERIFY whether Codex reads hooks from a project file the skill may
-own; if yes, part 2 adds it. Until then the Codex gap is documented.
+does not write (user-owned). TO VERIFY in the part-2 capability test whether Codex reads hooks from
+a project file the skill may own; if yes, part 2 adds it. Until then the Codex gap is documented.
 
 **Security note.** The hook script runs on every Bash/PowerShell call. Under the A3 boundary the
 checkout is trusted, so this adds no new attacker-controlled execution. Without the A3 boundary an
 attacker's branch can already add any hook to `.claude/settings.json`; the README states this
 alongside A3.
 
-**Tests.** R50 table-driven: 40+ command strings (blocked and allowed), including PowerShell forms,
-quoted arguments, `git.exe`, separators, `$()`; R51 malformed stdin exits 0 and logs; R52 the merge
-adds the hook once, keeps user hooks, and a re-run is a zero diff.
+**Tests.** R50 table-driven: 40+ blocked and allowed command strings, including PowerShell
+backtick escapes, quoted arguments, `git.exe`, separators and `$()`; R51 malformed stdin exits 1
+and emits the fixed stderr message exactly; R52 merges the hook once, distinguishes event and
+matcher collisions, preserves user hook order/options, and produces zero diff on rerun.
+R83 runs the installed command through Claude Code from root and subdirectories, with spaces and
+non-ASCII paths, with Node missing, and with malformed hook input; host behaviour remains
+TO VERIFY until measured. R84 covers the four added subcommands (every `stash` form blocked),
+`-p` and `--patch` as option tokens, `-c alias.*`, a commit whose quoted message contains `-p`
+(allowed), and ordinary orchestrator commit/push/checkout commands that must not be blocked.
+R50 also checks that the README lists the remaining PowerShell gaps.
 
 ---
 
@@ -284,18 +462,38 @@ without a prompt. contact-rewards-backend had 12 such rules.
 - `detect.mjs` and `validate.mjs` classify every rule in `.claude/settings.json` `permissions.allow`
   (shared file only; `settings.local.json` is personal and only gets an info line):
 
-  | Class          | Examples                                                                                                                                                           | Level                         |
-  | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-  | runs repo code | `npm run *`, `npm test*`, `npm start*`, `yarn *`, `pnpm *`, `npx <local bin>`, `node <relative path>`, `./*`, `make *`, `bash <file>`, `sh <file>`, `pwsh -File *` | warn                          |
-  | broad          | a bare `Bash` or `PowerShell`, `*` matching the whole command                                                                                                      | fail if managed, warn if user |
-  | other          | `git status`, `gh pr view *`                                                                                                                                       | none                          |
+  | Class          | Examples                                                       | Level                         |
+  | -------------- | -------------------------------------------------------------- | ----------------------------- |
+  | runs repo code | Package scripts, local executables and repository scripts      | warn                          |
+  | broad          | Bare `Bash` or `PowerShell`, or `*` matching the whole command | fail if managed; warn if user |
+  | other          | `git status`, `gh pr view *`                                   | none                          |
+
+  "Runs repo code" includes `npm run *`, `npm test*`, `npm start*`, `yarn *`, `pnpm *`,
+  `npx <local bin>`, `node <relative path>`, `./*`, `make *`, `bash <file>`, `sh <file>` and
+  `pwsh -File *`.
 
 - The warning text names the rule and the remedy (move it to `.claude/settings.local.json` if the
   developer accepts the risk on their own machine).
-- `merge-claude-settings.mjs` already refuses broad managed allows; it now also refuses managed allows
-  in the "runs repo code" class. The skill proposes no managed allow rules in v3.
+- `merge-claude-settings.mjs` already refuses broad managed allows; it now also refuses managed
+  allows in the "runs repo code" class. The skill proposes no new managed allow rules in v3.
+  VERIFIED v2 broad-allow refusal in `project-setup/scripts/merge-claude-settings.mjs:36`.
 
-**Tests.** R53 classification table; R54 the merge refuses a managed `Bash(node .ai/tools/*)` allow.
+**Migration.** List every existing v2 managed allow rule in the Phase 0 plan, using installed
+ownership metadata to distinguish it from user entries. Remove a rule only with approval; neither
+the absence of new v3 allows nor a metadata rewrite authorises silent removal of an old one.
+
+An approved settings removal uses `--approve-user-content` for `.claude/settings.json` and updates
+the manifest consistently. Record approved omissions under B5/B6 so rendering does not propose
+the rule again. If the rule is already absent, reconcile its ownership through B5's explicit
+manifest-only plan item. Unapproved removals leave the existing rule and ownership intact.
+
+The skill does not write `settings.local.json`. Rollback restores settings and ownership metadata
+through the existing apply journal, subject to protection for later user edits.
+
+**Tests.** R53 classification table; R54 the merge refuses a managed
+`Bash(node .ai/tools/*)` allow. R85 lists all v2 managed allows in Phase 0, preserves them without
+approval, removes only approved entries, preserves user rules, records omissions, and verifies
+rerun and rollback. R86 covers reconciliation when a managed allow is already absent.
 
 ---
 
@@ -317,8 +515,14 @@ repository files, without asking. It failed only because no device was connected
 Bash`), so MCP tools are not available to the subagent. TO VERIFY in the live run: a reviewer
   subagent cannot call an MCP tool that the parent session has.
 - Codex: TO VERIFY whether a custom agent TOML can disable MCP servers or apps for that agent. If it
-  can, the wrappers set it. If not, the README documents the gap and recommends disabling
-  file-reading connectors in Codex for repositories under this skill.
+  can, the wrappers set it. Either way, connector isolation for review lanes is enforced by the
+  external lane launcher, not by project-setup (debate D4). Disabling only file-reading
+  connectors is not enough: any connector that sends data can carry out what was read.
+- The launcher enumerates MCP servers in the worker's effective directory, configuration and
+  profile (`codex mcp list`), disables every server, app and plugin, and refuses to launch if
+  enumeration or disabling fails. project-setup documents this prerequisite in the README, and
+  the N8 doctor audits it: it reports server identifiers and disable coverage, never credentials,
+  and an unresolved failure means the lane is not ready.
 - VERIFIED 2026-10-14 (review lane on this repository): when every sandboxed command failed
   ("setup refresh had errors"), Codex 0.162.1 called the `node_repl` MCP server (reading the
   repository with `node:fs`) and then `codex_apps.remote_desktop_commander.list_devices`,
@@ -327,9 +531,12 @@ Bash`), so MCP tools are not available to the subagent. TO VERIFY in the live ru
 - Measured 2026-10-14: `-c mcp_servers.node_repl.enabled=false --disable apps --disable plugins`
   removes the `node_repl` and `codex_apps` tools while keeping the user config and
   `[windows] sandbox = "elevated"`. `--ignore-user-config` removes them too, but also drops the
-  sandbox setting (commands are then "blocked by policy"). VERIFIED 2026-10-15 with the sandbox
-  running: `node_repl` is not exposed, an explicit call is reported unavailable, and no
-  `mcp_tool_call` event appears.
+  sandbox setting (commands are then "blocked by policy"). Audit evidence 2026-10-15, with the
+  sandbox running: the model reported `node_repl` unavailable when asked to call it, and no
+  `mcp_tool_call` event appeared. This is model-reported, not host evidence: launch arguments and
+  zero calls show configuration and non-use, not that the tools were absent (debate D4).
+- TO VERIFY, blocks release: a host-level negative-capability test shows that connector tools
+  are unavailable to a lane launched as above.
 
 **Tests.** Template tests check the rule text is present in both canonical files and both Codex
 wrappers render it. Behaviour is covered by the live run only.
@@ -354,26 +561,44 @@ recorded in the manifest are present.
 **Design.**
 
 - `validate.mjs` compares, for every `keys`-owned file, each managed entry recorded in the manifest
-  with the actual file:
+  with the actual file, using that file's ownership schema:
 
-  | Case                                               | Level                                                    | Message                                                                                  |
-  | -------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-  | managed `deny` entry missing from the shared file  | fail                                                     | names the rule and the file; "a managed security control was removed"                    |
-  | managed `allow` entry missing from the shared file | warn                                                     | removing an allow only narrows permissions; "update the manifest on the next update run" |
-  | managed hook entry (A2) missing                    | warn                                                     |                                                                                          |
-  | entry present only in `settings.local.json`        | the shared-file result stands, plus an info line         | a local copy protects one developer, not the team                                        |
-  | entry present but changed (different text)         | treated as missing + an info line about the changed rule |                                                                                          |
-  | user-added entries                                 | never reported as drift                                  |                                                                                          |
+  | Case                                         | Level                                               |
+  | -------------------------------------------- | --------------------------------------------------- |
+  | Managed `deny` missing from the shared file  | fail                                                |
+  | Managed `allow` missing from the shared file | warn                                                |
+  | Managed hook entry (A2) missing              | warn                                                |
+  | Entry present only in `settings.local.json`  | Shared-file result stands, plus info                |
+  | Entry present but changed                    | Treat as missing, plus info about the changed entry |
+  | User-added entry                             | Never report as managed drift                       |
 
-- Nothing is restored automatically and nothing is widened. The next update run lists every missing
-  managed entry in the Phase 0 plan and asks per entry: restore, or drop from the manifest. A dropped
-  `deny` needs `--approve-user-content` for `.claude/settings.json`.
-- Every validate result carries `"scope": "static"`. The report keeps the separate runtime capability
-  table; a static pass never appears in the "verified at runtime" column.
+  A missing deny names the rule and file: "a managed security control was removed".
+  A missing allow explains that removal only narrows permissions and requests manifest
+  reconciliation on the next update. A local copy protects one developer, not the team.
 
-**Tests.** R55 fixture matrix: all present (pass); managed allow removed (warn); managed deny removed
-(fail); deny present only locally (fail + info); user-added allow and deny untouched (no finding); a
-re-run after an update that dropped the entries is clean.
+- Nothing is restored automatically and nothing is widened. The next update run lists every
+  missing managed entry in Phase 0 and asks per entry: restore, or drop from the manifest.
+  Dropping a deny requires explicit approval for `.claude/settings.json`, including when only
+  the manifest needs to change.
+- An approved omission is recorded in the manifest, not merely deleted from its managed-entry
+  list. Renderers honour that record and do not propose the omitted entry again on later runs.
+  Static reporting distinguishes an approved omission from an unexpectedly missing control.
+- A manifest-only change is an explicit plan item with its own `apply.mjs commit`. It must be
+  reviewable and approvable even when no project file bytes change. It is not a git commit and
+  does not require a dummy settings edit. The omission record and its approval are bound to
+  the prepared plan and covered by the normal commit preconditions and rollback journal.
+- A legacy manifest without `integrity` produces an info line and receives the field on the
+  next approved commit, as specified in B6. Validation alone does not rewrite it.
+- Every validate result carries `"scope": "static"`. The report keeps the separate runtime
+  capability table; a static pass never appears in the "verified at runtime" column.
+
+**Tests.** R55 fixture matrix: all present (pass); managed allow removed (warn); managed deny
+removed (fail); deny present only locally (fail + info); changed rule treated as missing; missing
+managed hook (warn); user-added allow and deny untouched (no finding). A rerun after an approved
+omission is clean and rendering does not propose the omitted entry again.
+R86 prepares, approves and commits an explicit manifest-only reconciliation; settings bytes stay
+unchanged, unapproved omission fails, changed plan inputs prevent commit, and rollback restores
+the previous manifest. R88 covers legacy manifests without `integrity`.
 
 ### B6. The manifest is written only by the skill's scripts [27]
 
@@ -386,18 +611,49 @@ an update run that did not happen.
 
 **Design.**
 
-- `apply.mjs commit` writes `integrity`: SHA-256 over the canonical JSON of the manifest without that
-  field. `validate.mjs` fails on a mismatch: "manifest edited outside project-setup; run an update to
-  re-record, or restore it from git". This is an accident guard, not a security boundary: anyone can
-  recompute it with the script, and the message says so.
-- `AGENTS.md` critical-rules template and both canonical agent definitions gain: "`.ai/manifest.json`
-  is written only by the project-setup scripts. When you change content inside a managed block or a
-  managed file, leave the manifest alone; the drift report is expected until the next update run."
-- An update run treats content changed inside managed blocks as user content (existing R29 rules) and
-  offers to adopt it into the project's managed content with approval.
+- `apply.mjs commit` writes `integrity`: SHA-256 over the canonical JSON of the manifest without
+  that field. `validate.mjs` fails on a mismatch: "manifest edited outside project-setup; run an
+  update to re-record, or restore it from git". This is an accident guard, not a security boundary:
+  anyone can recompute it with the script, and the message says so.
+- A legacy manifest without `integrity` gives an info line, not an integrity-mismatch failure.
+  The next approved commit adds the field. Validation is read-only.
+- `AGENTS.md` critical-rules template and both canonical agent definitions gain:
+  "`.ai/manifest.json` is written only by the project-setup scripts. When you change content
+  inside a managed block or a managed file, leave the manifest alone; the drift report is
+  expected until the next update run."
+- Record the hash of each managed block and compare the current block with that recorded hash
+  before regenerating it. If it changed, show the diff and ask: keep, adopt or replace.
+  - Keep: preserve the current block and its existing recorded baseline; drift remains visible.
+  - Adopt: approve the current block as the new managed baseline and record its hash.
+  - Replace: approve the shown replacement and record the resulting block hash after apply.
+    No regeneration or hash adoption happens silently. Approval is part of the prepared plan.
+- This consent gate is a new requirement, not existing R29 behaviour. VERIFIED in v2 source:
+  `project-setup/scripts/apply.mjs:450` already records per-block hashes and
+  `project-setup/scripts/validate.mjs:105` reports block drift. R29 is not evidence that
+  regeneration of an edited block requires keep/adopt/replace.
+  TO VERIFY with R96 whether a v2 update already loses an edit inside an existing managed block.
+- Manifest-only changes, including adoption without content changes and B5 omission records,
+  are explicit plan items with their own `apply.mjs commit`. Prepare shows their metadata diff
+  and binds approval to it; commit must not discard the operation as "zero diff" merely because
+  project-file bytes are unchanged. A true no-op remains a no-op.
+- Approved omissions persist in the manifest and are consumed by renderers, so the same omitted
+  control is not proposed again.
 
-**Tests.** R56 a hand edit of any manifest field fails validate; R57 a normal commit and a zero-diff
-re-run pass; R58 the template text is present in AGENTS.md and both canonical agents.
+**Migration.** Preserve existing per-block hashes; do not rebaseline edited content merely to
+upgrade the manifest. Legacy manifests gain integrity on their next approved commit. Adoption
+and omission-only operations use the same manifest precondition checks, backups and journal as
+content-changing operations. Rollback restores the previous manifest and any changed files,
+subject to the existing guard against overwriting later user edits.
+
+**Tests.** R56 a hand edit of any field in an integrity-bearing manifest fails validate; R57 a
+normal commit and a true zero-diff rerun pass; R58 the template text is present in AGENTS.md and
+both canonical agents. R86 covers explicit manifest-only commits and persistent omissions.
+R87 edits a managed block and attempts regeneration: the diff and keep/adopt/replace choice are
+required; keep preserves drift, adopt records only approved content, replace applies only the
+approved replacement, and rollback restores the previous state. R88 checks that a legacy
+manifest without integrity produces info, remains unchanged during validation, and gains
+integrity on the next approved commit. R96 reproduces the v2 edited-block update path to settle
+the TO VERIFY claim without treating its result as the new v3 acceptance criterion.
 
 ### D3. docs-sync propagates a changed claim to every copy of it [28]
 
@@ -513,60 +769,166 @@ readable and editable; until then, routing to the sensitive lanes stays in the g
   shows it. Never secrets or personal data.
 - The skill adds `docs/plans/` to `.prettierignore` when the project runs prettier on `*.md` (a
   frozen plan must never be rewritten). Done by hand in contact-rewards-backend PR #2033.
+- `.prettierignore` joins the write allowlist with `blocks` ownership. Add or update only the
+  managed block; preserve user lines outside it. Use the normal draft/prepare/commit flow and
+  B6's protection for edited managed blocks. Rollback restores the prior file, or removes a
+  newly created file, subject to the existing protection for later user edits.
 - docs-sync and every docs lane never edit `docs/plans/` (D3).
+- Tests: R89 the allowlist permits `.prettierignore`, the manifest records `blocks` ownership,
+  an existing file keeps its user lines, the conditional managed entry is correct, rerun is
+  unchanged, and rollback restores the prior state. Frozen plan files remain untouched.
 
 ### N5. One sanctioned review diff (rc.1, part of A3)
 
-- New `git-safe` subcommand `review-diff --base <ref> [--out <file>]`: diff from the merge-base of
-  `<ref>` to the working tree, including staged, unstaged and untracked non-ignored files, with the
-  secret excludes applied to all three. Untracked files are rendered as new-file diffs by reading
-  them in-process after the path check; the index is never modified (no `git add -N`).
-- Default output file `.ai/.run/review/<timestamp>.diff` (git-ignored), so a read-only Codex lane
-  reads a file instead of running git.
-- The A2 hook allows every `git-safe.mjs` call; Codex reviewers are told to use the file or git-safe.
-- Tests: R65 untracked file appears; untracked secret path does not; index unchanged; R66 a secret
-  file renamed into a normal path is still caught by content-free path rules only (documented
-  limit).
+- New `git-safe` subcommand:
+  `review-diff --base <ref> [--head <ref>] [--out <file>]`.
+  Base and head resolve to commit IDs before building git arguments; both IDs and the review
+  mode are recorded in the report.
+- Committed-head mode (`--head` present) compares the merge-base of the resolved base and head
+  commits to the resolved head. It reads git objects from the trusted checkout and excludes
+  that checkout's staged, unstaged and untracked changes.
+- Local-worktree mode (`--head` absent) resolves current HEAD as head and compares the merge-base
+  of base and HEAD to the user's working tree, including staged, unstaged and untracked
+  non-ignored files. This mode is for the user's own branch.
+- Both modes apply the A1/A6 secret policy and A3 argument-building and output-limit rules.
+  Untracked files in local-worktree mode are rendered as new-file diffs by reading them
+  in-process; the index is never modified (no `git add -N`).
+- Before reading an untracked file, require a regular file inside the repository. Check both
+  its repository path and its resolved path against the secret policy. Reject symlinks and
+  junctions, including traversal through linked directories; do not follow a link and then
+  treat its target as an ordinary untracked file.
+- Review-lane invocations print to stdout only: no implicit output file and no `--out`.
+  The orchestrator writes the diff file and passes its path to the review lane. The `--out`
+  form is for that orchestrator operation.
+- File output is confined to `.ai/.run/review/` and uses exclusive creation of a new file.
+  The default orchestrator artifact path is `.ai/.run/review/<timestamp>.diff`, with a
+  Windows-safe timestamp. An explicit `--out` cannot escape that directory, overwrite an
+  existing file or use a symlink/junction to redirect output.
+- The review lane reads the supplied file or uses stdout-only git-safe commands. It never
+  creates the artifact itself, even when its runtime would permit writes.
+- The A2 hook allows git-safe calls; that allowance does not grant reviewers a write capability
+  or permit a separate raw-git command in the same shell invocation.
+- Documented limit: path rules cannot detect secret content copied to an unrelated allowed
+  path. They are not a content scanner and cannot guarantee that such a diff is secret-free.
+- Tests: R65 an ordinary untracked file appears, an untracked secret path does not, and the
+  index is unchanged. R66 checks that the copied-secret-content limit is documented; it does
+  not assert that path rules detect the copied content. R90 covers committed-head and
+  local-worktree modes, merge-base selection, resolved IDs, and exclusion of trusted-checkout
+  changes from committed-head output. R91 covers regular files, out-of-repository paths,
+  resolved secret paths, symlinks, Windows junctions, output containment, existing-file
+  rejection and Windows-safe artifact names. R92 verifies that the orchestrator creates and
+  passes the artifact while reviewer invocations print only to stdout and leave files unchanged.
 
 ### N6. No shell command mentions an env file (rc.1, item A7)
 
-- VERIFIED: the user-level `Bash(*.env*)` deny blocks `node scripts/env-keys.mjs keys .env.example`
-  and any command containing `process.env`. The 2.0.0 env-keys flow is therefore broken on this
-  machine today.
-- `env-keys.mjs` finds the template itself: `env-keys keys --template auto` and
-  `env-keys merge --template auto --keys <file>`; `auto` resolves `.env.example`, `.env.sample`,
-  `.env.template` in that order. No command line the skill emits contains `.env`.
-- Every step that would copy or create an env file (for example creating `.env` from the template)
-  becomes a manual instruction in the report.
-- `SKILL.md` and references stop showing `grep process.env`; config names come from config code via
-  file tools.
-- Tests: R67 a scan of every command string in SKILL.md, references and scripts' usage text finds no
-  `.env`; R68 `--template auto` resolution.
+- VERIFIED in the recorded user-machine test: the user-level `Bash(*.env*)` deny blocks
+  `node scripts/env-keys.mjs keys .env.example` and commands containing `process.env`.
+  The 2.0.0 env-keys flow is therefore broken on this machine today.
+- `env-keys.mjs` finds the template itself:
+  `node scripts/env-keys.mjs keys --template auto` and
+  `node scripts/env-keys.mjs merge --template auto --keys <file> --run-id <id>`.
+  `auto` resolves `.env.example` only. It does not fall back to `.env.sample`, `.env.template`
+  or any other `.env*` file. No command line the skill emits contains `.env`.
+- If `.env.example` is missing, report that fact and give the user a manual step to create the
+  key-name-only template. Do not automatically create a substitute or inspect another env file.
+- DECIDED N6 / F15: `.env.example` holds key names only, with no secrets. Project-setup scripts
+  may read and edit that file through the reviewed env-keys/apply flow; agents never open it
+  directly. Script reports expose key names and classifications, never values.
+- Every other `.env*` file remains denied. User-level denies stay unchanged; the global worker
+  rule records the script-only exception (2026-10-15). The exception is not an agent read
+  permission and does not authorise a general-purpose script to open env files.
+- Every step that would copy or create another env file, such as creating `.env` from the
+  template, becomes a manual instruction in the report.
+- `SKILL.md` and references stop showing `grep process.env`; config names come from config code
+  via file tools.
+- Tests: R67 a scan of every emitted command string in SKILL.md, references and scripts' usage
+  text finds no `.env`. R68 `--template auto` resolves only `.env.example`; when it is missing,
+  neither keys nor merge opens an alternative or creates a template, and the report contains
+  the manual step. R93 the script-only exception is present in instructions, user-level denies
+  are unchanged, other `.env*` inputs are rejected, and script output never exposes values.
 
 ### N7. Secret scan before push, and a branch-protection report (rc.2, item B7)
 
-- Opt-in in Phase 0. When accepted, the skill adds a managed block to `.husky/pre-push` (or creates
-  it) that runs `node .ai/tools/secret-scan-push.mjs`, which runs gitleaks on the commits being
-  pushed only.
+- Opt-in in Phase 0. When accepted, the skill adds a managed block to `.husky/pre-push` (or
+  creates it) that runs `node .ai/tools/secret-scan-push.mjs`, which runs gitleaks on the commits
+  being pushed only.
+- `.husky/pre-push` joins the write allowlist with `blocks` ownership. Preserve user lines and
+  apply B6's protection to edited managed blocks. Installation uses the normal
+  draft/prepare/commit journal; rollback restores the old hook or removes a newly created one,
+  subject to the existing protection for later user edits.
+- Hook composition (debate D3). An appended block is unreachable after an earlier `exit 0`, and
+  an earlier stdin reader leaves it no input (`scripts/blocks.mjs:104` appends). So the N7 block
+  is a minimal POSIX-sh adapter placed first, after the shebang and any Husky header line:
+  - It copies stdin to `$(git rev-parse --git-dir)/project-setup/pre-push-input.<pid>` (quoted
+    paths; never in the work tree), runs the Node scanner with that file as input, then reopens
+    stdin from it for the rest of the hook (`exec < "<file>"`) and deletes the file at once. The
+    open descriptor keeps reading, so no file is left behind and no sweep is needed. TO VERIFY on
+    Git for Windows `sh`: reading continues after the file is deleted. If it does not, the file
+    is left in place instead and there is no automatic sweep; the doctor reports leftovers.
+  - It installs no EXIT trap, so it never changes user trap behaviour. The file holds ref names
+    and object IDs only, no secret values.
+  - Creating, copying, scanning or reopening failure stops the push and removes that
+    invocation's file.
+  - A hook that is not a POSIX sh script is not integrated automatically; the report gives a
+    manual step.
+- Report the hook as not installed unless Husky is active. Creating the file alone does not
+  establish that git will invoke it.
+  DECIDED 2026-10-15: Husky counts as active when `git config core.hooksPath` points into
+  `.husky/` and `husky` is in `devDependencies`; otherwise the hook is reported as not installed.
+  The report also states that `HUSKY=0` in the environment disables hooks and cannot be seen by a
+  static check.
 - DECIDED 2026-10-14: if gitleaks is not installed, the push stops with the install command
   (`winget install Gitleaks.Gitleaks`, `brew install gitleaks`). It never skips silently.
-- No lint-staged change and no prettier interaction: pre-push only, the scanner prints file:line:rule
-  only (no secret values), and `.husky/pre-push` is ownership `blocks` so user lines stay.
-- Branch protection: `detect.mjs` runs read-only `gh api` on the default branch's rules and reports
-  whether a required status check exists and whether any bypass actor is set. Report only; the skill
-  never changes GitHub settings. (contact-rewards-backend: `require-ci` with an "always" bypass for
-  repository admins, by the maintainer's choice; reported, not flagged as a defect.)
-- Tests: R69 hook block merge with an existing pre-push; R70 missing gitleaks stops the push with
-  exit 1; R71 report on a fixture ruleset JSON.
+- Scanner errors fail closed: execution failure, scan failure or inability to determine the
+  required commit set stops the push. An unsuccessful scan is never reported as clean.
+- DECIDED 2026-10-15, revised by debate D2, commit set per pre-push input line:
+  - Existing ref whose remote old commit exists locally: the commits in
+    `<remote old>..<local new>`, non-fast-forward updates included.
+  - New ref, or remote old commit not available locally: the commits reachable from the local
+    tip, excluding those reachable from a fresh ref advertisement of the actual push endpoint
+    (`$2`). Only advertised object IDs that exist locally exclude anything; an unavailable ID
+    excludes nothing. Local remote-tracking refs alone are not enough: a remote can push to a
+    different URL than it fetches from, be repointed, or keep stale refs.
+  - Deleted ref (local ID is zero): nothing to scan.
+  - Several refs in one push: the union of their commit sets, each commit scanned once.
+    Failure to compute any of these stops the push; there is no empty-scan fallback.
+- No lint-staged change and no prettier interaction: pre-push only, the scanner prints
+  file:line:rule only (no secret values), and user hook lines stay.
+- Branch protection: `detect.mjs` runs read-only `gh api` on the default branch's rules and
+  reports whether a required status check exists and whether any bypass actor is set.
+  Report only; the skill never changes GitHub settings. (contact-rewards-backend: `require-ci`
+  with an "always" bypass for repository admins, by the maintainer's choice; reported, not
+  flagged as a defect.)
+- Tests: R69 hook block merge with an existing pre-push, preserving user lines; R70 missing
+  gitleaks stops the push with exit 1 and the install command; R71 report on a fixture ruleset
+  JSON. R94 checks the write allowlist, `blocks` ownership, rerun/rollback and "not installed"
+  reporting when Husky is inactive, plus the active case (`core.hooksPath` into `.husky/` and
+  `husky` in `devDependencies`) and the `HUSKY=0` note. R95 covers scanner errors and
+  range-resolution failures as blocking outcomes, plus existing refs, non-fast-forward updates,
+  new branches, deletions and several refs with overlapping commits scanned once. R98 covers
+  differing fetch and push URLs, a repointed remote, stale tracking refs and advertised objects
+  missing locally. R99 runs the adapter under Git for Windows `sh` with an earlier `exit 0`, an
+  earlier stdin reader, a user EXIT trap, a user `exec`, a git directory path with spaces, a
+  non-sh hook and each adapter failure, and checks that no input file is left behind.
 
 ### N8. Hooks on Windows (rc.1 for A2, rc.2 for N7)
 
 - Every hook the skill installs is a Node script (`node <file>`); none calls python, bash-only
-  syntax or PowerShell-only syntax.
-- Every hook fails loudly: a blocking failure explains itself; a non-blocking internal error is shown
-  (A2: exit 1 with stderr).
+  syntax or PowerShell-only syntax. One exception (debate D3): N7's minimal POSIX-sh adapter at
+  the top of `.husky/pre-push`. It only captures and replays stdin; the scanning stays in Node.
+- The A2 hook command is root-anchored and quoted. Candidate:
+  `node "$CLAUDE_PROJECT_DIR/.ai/tools/guard-raw-git.mjs"`.
+  TO VERIFY through Claude Code on Windows shells in R83: the root variable and quoting resolve
+  correctly from both the repository root and a subdirectory, including spaces and non-ASCII
+  characters in the project path. The candidate is not a verified portable command.
+- Every hook fails loudly: a blocking failure explains itself. For A2's unparseable-input path,
+  the hook exits 1 and writes exactly:
+  `guard-raw-git: could not parse command; allowed without checking`.
+  R51 asserts that process result. TO VERIFY in R83 that Claude Code permits the tool call and
+  shows stderr; do not infer host behaviour from the process exit code alone.
 - `node .ai/tools/hooks-selftest.mjs` runs each installed hook with known inputs (allowed and
-  blocked) and reports pass/fail; validate runs it and fails on any failure.
+  blocked) and reports pass/fail; validate runs it and fails on any failure. Direct script tests
+  are supplemented by R83's host-level tests, including a missing Node executable.
 - VERIFIED 2026-10-15 (Codex CLI 0.162.1, Desktop 26.1007.9446.0): before every sandboxed
   command, the elevated sandbox's setup refresh re-validates the ACLs on the Desktop app's
   `cua_node` runtime (`...\runtimes\cua_node\<hash>\`). Any file a running Desktop process holds
@@ -582,6 +944,10 @@ readable and editable; until then, routing to the sensitive lanes stays in the g
   verbatim. It never reads `~/.codex/.sandbox-secrets/` or `auth.json`. Then it stops and asks;
   no fallback to full access.
 - Tests: R72 self-test passes on the fixture; R73 a broken hook script makes validate fail.
+  R51 checks exit 1 and the exact stderr message. R83 runs through Claude Code from root and
+  subdirectories, with spaces and non-ASCII paths, with Node missing, and with malformed input.
+  It verifies root anchoring and records host launch/error behaviour; failures remain visible
+  and cannot be reported as successful hook verification.
 
 ### Decisions log (maintainer, 2026-10-14)
 
@@ -674,9 +1040,10 @@ each fix into its section; round 2 reviews that revision.
   Before rc.2, N7 defines the push range (new branch, deletion, several refs) and fails closed on
   scanner errors.
 - **X1** (NON-BLOCKING, A2) - option A. The blocked list adds `stash`, `reflog`, `diff-tree` and
-  `range-diff`; any command with `-p` or `--patch` is blocked; `-c alias.*` is blocked. An
-  allowlist was rejected: the hook also runs for the orchestrator, which needs commit, push and
-  checkout.
+  `range-diff`; `-p` or `--patch` is blocked when passed as an option, not when it appears inside
+  a quoted argument; `-c alias.*` is blocked. Every `stash` form stays blocked (maintainer,
+  2026-10-15, after the plan draft). An allowlist was rejected: the hook also runs for the
+  orchestrator, which needs commit, push and checkout.
 - **X2** (NON-BLOCKING, A6) - accepted. validate compares managed `patterns` with the list recorded
   in the project's manifest, not the current skill's list, so an older install reports "behind",
   not "edited".
@@ -687,8 +1054,25 @@ each fix into its section; round 2 reviews that revision.
 
 Part 1 open questions after this round:
 
-1. Still open: the reviewer did not address an optional out-of-tree git-safe.
-2. Answered by F18: there is an output size limit; the value (1 MiB proposed) is set in the next
-   revision.
+1. Closed 2026-10-15: no optional out-of-tree git-safe (A3).
+2. Answered by F18 and decided 2026-10-15: 1 MiB per invocation; above it the whole result is
+   refused (A3).
 3. Answered by F16: exit 1. The host behaviour stays TO VERIFY on Claude Code.
 4. Answered by F6: the move is shown in the Phase 0 plan and needs approval.
+
+---
+
+## Debate round 1 (2026-10-15)
+
+After the round 1 fixes were written into their sections, the maintainer asked for a debate on
+the whole document. Codex (review lane, gpt-6-astra, effort xhigh) challenged it; the orchestrator
+(Claude) answered; three rounds in one Codex session. The read-only sandbox held throughout, no
+MCP tool was called, and git state and the uncommitted diff were identical before and after each
+round. Codex raised four points and found nothing else worth arguing.
+
+| Point       | Codex's claim                                                                 | Outcome                                                                                                                                            |
+| ----------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1 (A6, N6) | `.envrc` and `.env-prod` match no base pattern                                | Agreed at once: `**/.env*` replaces `**/.env` and `**/.env.*`                                                                                      |
+| D2 (N7)     | Excluding every remote-tracking ref can skip commits new to the destination   | Claude proposed destination-remote refs only; Codex showed push URLs and stale refs break that; Claude conceded: use a fresh advertisement of `$2` |
+| D3 (N7, N8) | An appended pre-push block can be unreachable or get no stdin                 | Agreed: adapter first, stdin replayed. Codex then objected to an age-based sweep; the maintainer chose delete-after-open, no sweep                 |
+| D4 (A5)     | Disabling only file-reading connectors is too weak; zero calls is not absence | Codex conceded enforcement belongs to the launcher; Claude conceded the 2026-10-15 "unavailable" result is model-reported evidence                 |
