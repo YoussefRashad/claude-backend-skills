@@ -1,7 +1,9 @@
 # project-setup v3.0.0 - design
 
-Status: DRAFT. Part 1 (rc.1: security) is specified; early part-2/3 items and section N (delegate lanes)
-are specified; the rest of parts 2 and 3 follows after review.
+Status: part A and the rc.1 items (N5, N6, N8, and the B5/B6 parts moved by R2-2) are FROZEN as of
+commit 54ad312 (2026-10-15), after review round 3 found nothing. A change to them goes through the
+maintainer. Everything else is DRAFT: early part-2/3 items and the rest of section N are specified;
+the rest of parts 2 and 3 follows.
 
 Baseline: project-setup 2.0.0, archive SHA256
 `97185CE84C28F0D9D32E4766B2579E47811980D0B38736C24C4F42A7F1127CE8`. Every file reference below is
