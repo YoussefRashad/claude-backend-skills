@@ -34,6 +34,7 @@ C4 [24, 25, 20], C5 [11], D1 [18, 19], D2 [13], E1 [1], E2 [2], E3 [6], E4 [7].
 Added after part 1: B5 [26], B6 [27], D3 [28].
 Added from the delegate setup (2026-10-14): N1-N8, specified in section N. Slots: N5, N6, N8 go to
 rc.1; N7 goes to rc.2; N1, N2, N3, N4 go to rc.3 (N2 moved from rc.1 with D2, review round 1 F17).
+The omission and manifest-only parts of B5/B6 go to rc.1 (review round 2, R2-2).
 
 ### Compatibility rules for v3 (all parts)
 
@@ -136,7 +137,8 @@ every row of the table above attacker-controlled.
    An output size limit applies to these review commands, including diff output.
    DECIDED 2026-10-15: the limit is 1 MiB (1,048,576 bytes) of output per invocation. Above it,
    the command refuses the whole result, prints nothing partial, exits non-zero and tells the
-   caller to narrow the paths. A truncated review is never emitted.
+   caller to narrow the paths (`-- <paths>` on `review-diff`, `ls` and `grep`; see N5). A
+   truncated review is never emitted.
 
 4. The canonical `reviewer.md` section 1 changes:
    - Determine the review mode and resolved base/head IDs first, and record them in the header.
@@ -405,9 +407,11 @@ instruction. Deny rules such as `Bash(git diff *)` match command text from the s
 - Block these git subcommands:
   `diff show log blame cat-file grep archive format-patch whatchanged stash reflog diff-tree
 range-diff`.
-  `stash` is blocked as a whole, every stash subcommand included. Also block any git invocation
-  that passes `-p` or `--patch` as an option token; the same characters inside a quoted argument
-  (for example a commit message) do not count. Block configuration overrides using `-c alias.*`.
+  `stash` is blocked as a whole, every stash subcommand included. Also block any git invocation in
+  which `-p` or `--patch` is an argument of its own after shell quote removal, whatever quoting
+  was used: `git commit "-p"` passes a real `-p` to git and is blocked. An argument that is the
+  value of another option does not count: in `git commit -m "-p"` the `-p` is the message, so it
+  is allowed (review round 2, R2-1). Block configuration overrides using `-c alias.*`.
   These checks take precedence over skipping recognised global options.
   Exit 2 with a one-line message pointing to `node .ai/tools/git-safe.mjs`.
 - `git status`, `git branch`, `git fetch` and `git rev-parse` pass when they do not meet the
@@ -443,8 +447,10 @@ matcher collisions, preserves user hook order/options, and produces zero diff on
 R83 runs the installed command through Claude Code from root and subdirectories, with spaces and
 non-ASCII paths, with Node missing, and with malformed hook input; host behaviour remains
 TO VERIFY until measured. R84 covers the four added subcommands (every `stash` form blocked),
-`-p` and `--patch` as option tokens, `-c alias.*`, a commit whose quoted message contains `-p`
-(allowed), and ordinary orchestrator commit/push/checkout commands that must not be blocked.
+`-p` and `--patch` as arguments of their own, quoted or not (`git commit "-p"` and
+`git commit '--patch'` blocked), `-c alias.*`, `git commit -m "-p"` (allowed), and ordinary
+orchestrator commit/push/checkout commands that must not be blocked. R84 parses the commands only;
+it never runs git.
 R50 also checks that the README lists the remaining PowerShell gaps.
 
 ---
@@ -518,11 +524,19 @@ Bash`), so MCP tools are not available to the subagent. TO VERIFY in the live ru
   can, the wrappers set it. Either way, connector isolation for review lanes is enforced by the
   external lane launcher, not by project-setup (debate D4). Disabling only file-reading
   connectors is not enough: any connector that sends data can carry out what was read.
-- The launcher enumerates MCP servers in the worker's effective directory, configuration and
-  profile (`codex mcp list`), disables every server, app and plugin, and refuses to launch if
-  enumeration or disabling fails. project-setup documents this prerequisite in the README, and
-  the N8 doctor audits it: it reports server identifiers and disable coverage, never credentials,
-  and an unresolved failure means the lane is not ready.
+- The launcher disables MCP in the worker's effective directory, configuration and profile.
+  `--disable apps --disable plugins` removes apps and every plugin-provided server. Each server
+  defined in `config.toml` is disabled by name with `-c mcp_servers.<name>.enabled=false`. Only
+  config-defined names are passed: naming a plugin-provided server that way makes Codex fail to
+  load its configuration ("invalid transport", Codex 0.162.1, 2026-10-15). The launcher then runs
+  `codex mcp list --json` with the same flags, and refuses to launch unless every listed server
+  shows `enabled: false`. project-setup documents this prerequisite in the README, and the N8
+  doctor audits it: it reports server identifiers and disable coverage, never credentials, and an
+  unresolved failure means the lane is not ready.
+- Host evidence 2026-10-15: `codex mcp list` on this machine lists `code-review`, `codex_app`,
+  `cua_repl` and `node_repl`. With the lane flags it lists only `node_repl`, `enabled: false`;
+  without `--disable plugins`, `cua_repl` is enabled. This is host-reported configuration; that
+  the tools are absent inside a session stays TO VERIFY (below).
 - VERIFIED 2026-10-14 (review lane on this repository): when every sandboxed command failed
   ("setup refresh had errors"), Codex 0.162.1 called the `node_repl` MCP server (reading the
   repository with `node:fs`) and then `codex_apps.remote_desktop_commander.list_devices`,
@@ -549,6 +563,10 @@ wrappers render it. Behaviour is covered by the live run only.
 
 These belong to rc.2 but are specified now because the evidence is fresh. Backlog numbers [26], [27]
 and [28] are new.
+
+Exception (review round 2, R2-2): A4 and A6 in rc.1 depend on part of B5 and B6. That part moves to
+rc.1: approved-omission records in the manifest, renderers honouring them, explicit manifest-only
+prepare/commit/rollback, and test R86. The rest of B5 and B6 stays in rc.2.
 
 ### B5. Managed permission entries must exist in the shared settings [26]
 
@@ -781,9 +799,15 @@ readable and editable; until then, routing to the sensitive lanes stays in the g
 ### N5. One sanctioned review diff (rc.1, part of A3)
 
 - New `git-safe` subcommand:
-  `review-diff --base <ref> [--head <ref>] [--out <file>]`.
+  `review-diff --base <ref> [--head <ref>] [--out <file>] [-- <paths>...]`.
   Base and head resolve to commit IDs before building git arguments; both IDs and the review
   mode are recorded in the report.
+- Optional `-- <paths>` limits the review to those repository-relative paths in both modes
+  (review round 2, R2-3). Tracked changes are selected with literal pathspecs
+  (`:(literal)<path>`, so no pathspec magic); untracked files in local-worktree mode are selected
+  by the same paths. Each path passes A3's structural validation and the secret check; a secret
+  path is refused, and secret files under a selected directory stay excluded. This is how a
+  caller narrows a review that the 1 MiB limit refused.
 - Committed-head mode (`--head` present) compares the merge-base of the resolved base and head
   commits to the resolved head. It reads git objects from the trusted checkout and excludes
   that checkout's staged, unstaged and untracked changes.
@@ -818,6 +842,9 @@ readable and editable; until then, routing to the sensitive lanes stays in the g
   resolved secret paths, symlinks, Windows junctions, output containment, existing-file
   rejection and Windows-safe artifact names. R92 verifies that the orchestrator creates and
   passes the artifact while reviewer invocations print only to stdout and leave files unchanged.
+  R100 refuses an oversized review whole, then accepts narrower `-- <paths>` invocations that
+  together cover the change, in both modes; a secret path in `<paths>` is refused, secret files
+  under a selected directory stay excluded, and untracked files are filtered by the same paths.
 
 ### N6. No shell command mentions an env file (rc.1, item A7)
 
@@ -909,7 +936,10 @@ readable and editable; until then, routing to the sensitive lanes stays in the g
   differing fetch and push URLs, a repointed remote, stale tracking refs and advertised objects
   missing locally. R99 runs the adapter under Git for Windows `sh` with an earlier `exit 0`, an
   earlier stdin reader, a user EXIT trap, a user `exec`, a git directory path with spaces, a
-  non-sh hook and each adapter failure, and checks that no input file is left behind.
+  non-sh hook and each adapter failure. Where delete-after-open works, it checks that the input
+  file is gone and stdin still replays. Where it does not (the documented fallback), it checks
+  that stdin still replays, that invocation's file is kept, the doctor reports it, and no sweep
+  runs (review round 2, R2-4).
 
 ### N8. Hooks on Windows (rc.1 for A2, rc.2 for N7)
 
@@ -1076,3 +1106,27 @@ round. Codex raised four points and found nothing else worth arguing.
 | D2 (N7)     | Excluding every remote-tracking ref can skip commits new to the destination   | Claude proposed destination-remote refs only; Codex showed push URLs and stale refs break that; Claude conceded: use a fresh advertisement of `$2` |
 | D3 (N7, N8) | An appended pre-push block can be unreachable or get no stdin                 | Agreed: adapter first, stdin replayed. Codex then objected to an age-based sweep; the maintainer chose delete-after-open, no sweep                 |
 | D4 (A5)     | Disabling only file-reading connectors is too weak; zero calls is not absence | Codex conceded enforcement belongs to the launcher; Claude conceded the 2026-10-15 "unavailable" result is model-reported evidence                 |
+
+---
+
+## Review round 2 (2026-10-15)
+
+Reviewer: the Codex review lane (gpt-6-astra, effort xhigh) on commit 5bbbb19, with the read-only
+sandbox enforced and every MCP server disabled; git state was identical before and after. It
+found 22 of 26 decisions correctly specified, and raised 3 BLOCKING and 1 NON-BLOCKING findings.
+This was the second review/fix loop with BLOCKING findings open, so the orchestrator stopped and
+asked; the maintainer accepted all four and had the orchestrator fix them.
+
+- **R2-1** (BLOCKING, A2/X1) - accepted. The shell removes quotes, so `git commit "-p"` passes a
+  real `-p`. Option status now comes from argument position, not quoting; R84 covers both cases.
+- **R2-2** (BLOCKING, section 0, A4/A6, B5/B6) - accepted. The omission and manifest-only parts of
+  B5/B6 that A4 and A6 depend on move to rc.1; the rest stays in rc.2.
+- **R2-3** (BLOCKING, A3/N5) - accepted. `review-diff` gains `-- <paths>` (literal pathspecs, same
+  secret checks) so a review refused by the 1 MiB limit can be narrowed; new test R100.
+- **R2-4** (NON-BLOCKING, N7/D3) - accepted. R99 now separates delete-after-open from the
+  documented fallback.
+
+Also corrected (orchestrator, while preparing this round): D4 as written told the launcher to
+disable every server by name. Naming a plugin-provided server makes Codex fail to load its
+configuration, so plugin servers are removed with `--disable plugins` and only config-defined
+servers are named; `codex mcp list --json` under the lane flags is the launch check (A5).
