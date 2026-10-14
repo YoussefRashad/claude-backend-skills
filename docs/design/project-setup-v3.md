@@ -32,8 +32,8 @@ Backlog-to-item map (v2 backlog numbers in brackets): A1 [4, 9], A2 [14], A3 [15
 A5 [22], A6 [3]. Parts 2-3: B1 [8], B2 [10, 20], B3 [5], B4 [12], C1 [20], C2 [21], C3 [23],
 C4 [24, 25, 20], C5 [11], D1 [18, 19], D2 [13], E1 [1], E2 [2], E3 [6], E4 [7].
 Added after part 1: B5 [26], B6 [27], D3 [28].
-Added from the delegate setup (2026-10-14): N1-N8, specified in section N. Slots: N2, N5, N6, N8
-go to rc.1; N7 goes to rc.2; N1, N3, N4 go to rc.3.
+Added from the delegate setup (2026-10-14): N1-N8, specified in section N. Slots: N5, N6, N8 go to
+rc.1; N7 goes to rc.2; N1, N2, N3, N4 go to rc.3 (N2 moved from rc.1 with D2, review round 1 F17).
 
 ### Compatibility rules for v3 (all parts)
 
@@ -481,7 +481,10 @@ Conflicts observed in that test, which N1 resolves:
   contain a delegation section; the skill never reads or writes them otherwise.
 - Tests: R60 template text; live: the no-tool load test above must show no "who reviews" conflict.
 
-### N2. Sensitive code paths, separate from secret paths (rc.1)
+### N2. Sensitive code paths, separate from secret paths (rc.3, with D2)
+
+Deferred from rc.1 in review round 1 (F17): it has no consumer before D2. Sensitive code stays
+readable and editable; until then, routing to the sensitive lanes stays in the global protocol.
 
 - New managed+user file `.ai/sensitive-paths.json`: `patterns` (generic, from the skill) and
   `projectPatterns` (user). Meaning: "readable; changes here route to the sensitive lanes and need
@@ -601,3 +604,91 @@ Conflicts observed in that test, which N1 resolves:
    semantics if Claude Code treats exit 1 on PreToolUse differently.
 4. A6: one `--approve-user-content` for moving stray entries, or treat the move as content-preserving
    and skip the approval?
+
+---
+
+## Review round 1 (2026-10-14, decisions 2026-10-15)
+
+Reviewer: the Codex review lane (gpt-6-astra, effort xhigh). The read-only sandbox failed on this
+machine (cause in N8), and the maintainer chose to run the review with full access; git state was
+identical before and after, and no MCP tool was called. The global protocol has since forbidden
+that fallback. F1-F20 come from the reviewer (15 BLOCKING); X1-X4 come from the orchestrator's
+cross-check (all NON-BLOCKING). Each decision below is the maintainer's. The next revision writes
+each fix into its section; round 2 reviews that revision.
+
+- **F1** (BLOCKING, A3/N5) - accepted. `review-diff` gains `--head <ref>`: a committed-head mode
+  for reviews from a trusted checkout, and a local-worktree mode for the user's own branch. Both
+  refs resolve to commit IDs, recorded in the report.
+- **F2** (BLOCKING, N5) - accepted. Untracked files are read only when they are regular files
+  inside the repository and their resolved path passes the secret check; symlinks and junctions
+  are rejected. Output goes only under `.ai/.run/review/`, to a new file (exclusive create) with a
+  Windows-safe name. Tests include Windows junctions.
+- **F3** (BLOCKING, A1/A3/A6) - accepted. One shared matcher and grammar: literals, `*`, `?`,
+  `**`. Anything else (`[]`, `{}`, escapes) fails validation. Matching is case-insensitive on
+  every platform. Parity tests cover `cat`, `ls`, `grep`, `diff` and every rendered control.
+- **F4** (NON-BLOCKING, N5) - accepted. R66 states the limit: path rules cannot detect secret
+  content copied to an unrelated path. The test checks that the limit is documented.
+- **F5** (BLOCKING, A3) - accepted. The v2 guard stays: an edited `full` file is shown and needs
+  approval. Project customisations move to `.ai/agents/reviewer.project.md`, which the canonical
+  file includes. User-added Codex wrapper settings (`default_permissions`) are preserved. This
+  replaces the A3 "TO VERIFY" on section merging.
+- **F6** (BLOCKING, A1/A6) - accepted. Versioned migration: an entry without a `**/` prefix becomes
+  `anchor: root`; other fields in the file are preserved; entries are classified as added,
+  modified or deleted against the installed v2 baseline. Restoring a deleted base entry or
+  replacing a modified one needs approval.
+- **F7** (BLOCKING, A2/A4/A6) - accepted. Ownership schemas per file. A managed hook is identified
+  by event, matcher and command together; user hook order and options are preserved. Existing v2
+  managed allow rules are listed in the Phase 0 plan and removed only with approval.
+- **F8** (BLOCKING, B6) - accepted. New requirement, not existing R29 behaviour: the hash of each
+  managed block is recorded, and before a changed block is regenerated the update shows the diff
+  and asks: keep, adopt or replace. TO VERIFY whether v2 already loses such edits.
+- **F9** (BLOCKING, B5/B6) - accepted. Manifest-only changes are explicit plan items with their own
+  commit. Approved omissions are recorded, so the renderer does not propose them again. A legacy
+  manifest without `integrity` gives an info line and gets the field on the next commit.
+- **F10** (BLOCKING, A6) - accepted. `prepare` computes one effective, migrated pattern set, and
+  every rendered control uses that snapshot.
+- **F11** (BLOCKING, A3) - accepted. Structural path checks, case-insensitive secret matching and
+  exact-case git lookup are separate steps. Git listings are NUL-delimited. Tests cover mixed-case
+  and non-ASCII names.
+- **F12** (BLOCKING, A2/N8) - accepted. The hook command is root-anchored and quoted (candidate:
+  `$CLAUDE_PROJECT_DIR`, TO VERIFY on Windows shells). Tests run through Claude Code from the root
+  and from a subdirectory, with spaces and non-ASCII in the path, and with Node missing.
+- **F13** (NON-BLOCKING, A2) - accepted. Backticks are removed from PowerShell segments before
+  matching; other PowerShell forms are listed as known gaps.
+- **F14** (BLOCKING, N5) - accepted. The orchestrator writes the review diff file and passes it to
+  the review lane. Commands available to reviewers print to stdout only.
+- **F15** (BLOCKING, N6) - accepted and resolved by the Decisions log entry N6 / F15: the
+  project-setup scripts read and edit `.env.example`; agents never open it directly. The
+  user-level denies stay unchanged; the global worker rule states the exception (2026-10-15).
+- **F16** (NON-BLOCKING, A2/N8) - accepted. R51 expects exit 1 and the fixed stderr message.
+- **F17** (NON-BLOCKING, N2) - accepted as a deferral: N2 moves to rc.3 and ships with D2, its first
+  consumer.
+- **F18** (BLOCKING, A3) - accepted. Argument builders per subcommand: commit IDs resolved first;
+  grep patterns passed with `-e`; `--` before paths; `cat-file blob`, never `show`; no textconv or
+  external diff; an output size limit. Adversarial tests: leading-dash patterns and refs,
+  malformed policy, git failure, oversized output.
+- **F19** (BLOCKING, N6) - accepted. `--template auto` resolves `.env.example` only. When it is
+  missing, the report gives a manual step.
+- **F20** (NON-BLOCKING, N4/N7) - accepted. `.prettierignore` and `.husky/pre-push` join the write
+  allowlist with `blocks` ownership. N7 reports the hook as not installed unless Husky is active.
+  Before rc.2, N7 defines the push range (new branch, deletion, several refs) and fails closed on
+  scanner errors.
+- **X1** (NON-BLOCKING, A2) - option A. The blocked list adds `stash`, `reflog`, `diff-tree` and
+  `range-diff`; any command with `-p` or `--patch` is blocked; `-c alias.*` is blocked. An
+  allowlist was rejected: the hook also runs for the orchestrator, which needs commit, push and
+  checkout.
+- **X2** (NON-BLOCKING, A6) - accepted. validate compares managed `patterns` with the list recorded
+  in the project's manifest, not the current skill's list, so an older install reports "behind",
+  not "edited".
+- **X3** (NON-BLOCKING, A6) - accepted. The manifest records a hash of the last rendered Codex
+  snippet; validate prints an info line when the project patterns changed since then.
+- **X4** (NON-BLOCKING, N2) - deferred with N2. "`ApiSignatureGuard` usages" is not a path glob;
+  when N2 returns, the candidate is a written rule instead of a pattern.
+
+Part 1 open questions after this round:
+
+1. Still open: the reviewer did not address an optional out-of-tree git-safe.
+2. Answered by F18: there is an output size limit; the value (1 MiB proposed) is set in the next
+   revision.
+3. Answered by F16: exit 1. The host behaviour stays TO VERIFY on Claude Code.
+4. Answered by F6: the move is shown in the Phase 0 plan and needs approval.
