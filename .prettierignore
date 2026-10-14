@@ -3,3 +3,5 @@ node_modules
 project-setup/
 # Husky hook bodies are shell, not formattable by Prettier.
 toolchain-config/templates/husky/
+# Frozen delegate plans are history; formatting would rewrite them.
+docs/plans/
