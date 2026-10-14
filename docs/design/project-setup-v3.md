@@ -9,6 +9,13 @@ Baseline: project-setup 2.0.0, archive SHA256
 `97185CE84C28F0D9D32E4766B2579E47811980D0B38736C24C4F42A7F1127CE8`. Every file reference below is
 to that tree. Suite at baseline: 59 PASS / 0 FAIL / 1 SKIP (R13d).
 
+Provenance of that archive (VERIFIED by the maintainer on 2026-10-15): it was built by hand in a
+Claude session from rc.13 and downloaded, like the rc.5 to rc.13 archives, and hashed with
+`Get-FileHash`. It was saved at 2026-10-10 01:09, before the tag commit `1356604` (01:41). Its 53
+files are byte-identical to `project-setup/` at tag `project-setup-v2.0.0` (0 differences). Zip
+entry times are the build time, so the archive cannot be reproduced byte for byte; it is not
+rebuilt. From rc.1 on, releases follow the scripted procedure in "Implementation decisions".
+
 Evidence sources: the contact-rewards-backend migration (run `ps-20261010-a780`, PR #2009), Codex
 security review on PR #2009, the GitHub CI work (PRs #2010-#2017), and the live Codex test on
 2026-10-12.
@@ -1132,3 +1139,39 @@ Also corrected (orchestrator, while preparing this round): D4 as written told th
 disable every server by name. Naming a plugin-provided server makes Codex fail to load its
 configuration, so plugin servers are removed with `--disable plugins` and only config-defined
 servers are named; `codex mcp list --json` under the lane flags is the launch check (A5).
+
+---
+
+## Implementation decisions for rc.1 (maintainer, 2026-10-15)
+
+The rc.1 architecture plan (plan lane) stopped on questions the frozen design leaves open, and the
+plan critique raised two more. The maintainer decided each one; they bind the rc.1 plan.
+
+- **Q1 - draft diffs after A2.** Setup shows the approved draft diffs with `apply.mjs` itself: it
+  renders each target-versus-draft diff in-process, with no git call, and refuses any secret path.
+  No hook exemption for `git diff --no-index`, which could read any two files, secrets included.
+- **Q2 - omissions across replaced entries.** An approved omission applies only to the exact entry
+  (anchor and glob) it was recorded for. A new or replacing base entry, such as `**/.env*` for
+  `**/.env.*`, is a new decision shown in the plan. Nothing broadens an old omission or restores
+  coverage without approval.
+- **Q3 - a template that already holds values.** The values are preserved and never printed; the
+  report states that the template holds values and must be reduced to key names by hand. Nothing is
+  erased automatically.
+- **Q4 - secret-scan and the policy.** The scanner keeps inspecting every file, protected paths
+  included, as its documented script-only exception allows; it prints no values. The effective
+  policy is used to label findings in protected paths, not to exclude them from the scan.
+- **Q5 - release procedure.** A script produces each release:
+  1. Release identity: the git tree id of `project-setup/` at the tag
+     (`git rev-parse <tag>:project-setup`).
+  2. Archive: `git archive --format=zip --prefix=project-setup/ <tag>:project-setup`, so entry
+     times are the commit time and the archive is reproducible.
+  3. The release notes record tag, commit, tree id and archive SHA256; the zip is attached to the
+     GitHub release.
+  4. v2.0.0 keeps its recorded provenance (see Baseline) and is not rebuilt.
+- **Q6 - an older skill on an updated project.** The manifest `schema` becomes 3. v2 validates
+  `schema === 2` (`scripts/schemas.mjs:55`), so a v2 skill run on a v3 project fails loudly instead
+  of rebuilding the manifest and dropping v3 records. `migration-v2.md` and the release notes state
+  this. No stronger guard: v2 is not in production yet, and its one known install
+  (contact-rewards-backend, PR #2009) is updated together with the skill.
+- **Q7 - what the doctor runs.** The doctor runs `codex mcp list --json` with the lane flags, reads
+  the newest sandbox log and checks for Codex Desktop processes. It never starts a model session.
