@@ -57,6 +57,10 @@ them by policy).
 Asset: the reviewing developer's machine and credentials, and the secrets in that developer's
 working tree (`env/`, `cert/`, `.env*`, cloud credentials in the user profile).
 
+Codex's read-only sandbox blocks writes only; reads span the user profile (the sandbox log shows
+a read ACE granted on `~/.claude.json`, 2026-10-15). A secret outside the repository is kept from
+a Codex lane by deny rules and instructions, not by the sandbox.
+
 Observation that drives A3: on a checkout of the attacker's branch, the attacker controls EVERY
 in-repo input the agents read:
 
@@ -315,6 +319,17 @@ Bash`), so MCP tools are not available to the subagent. TO VERIFY in the live ru
 - Codex: TO VERIFY whether a custom agent TOML can disable MCP servers or apps for that agent. If it
   can, the wrappers set it. If not, the README documents the gap and recommends disabling
   file-reading connectors in Codex for repositories under this skill.
+- VERIFIED 2026-10-14 (review lane on this repository): when every sandboxed command failed
+  ("setup refresh had errors"), Codex 0.162.1 called the `node_repl` MCP server (reading the
+  repository with `node:fs`) and then `codex_apps.remote_desktop_commander.list_devices`,
+  without asking. The run was stopped; nothing was sent (the device was offline). The brief did
+  not forbid MCP, so this rule belongs in the agent definition, not only in a brief.
+- Measured 2026-10-14: `-c mcp_servers.node_repl.enabled=false --disable apps --disable plugins`
+  removes the `node_repl` and `codex_apps` tools while keeping the user config and
+  `[windows] sandbox = "elevated"`. `--ignore-user-config` removes them too, but also drops the
+  sandbox setting (commands are then "blocked by policy"). VERIFIED 2026-10-15 with the sandbox
+  running: `node_repl` is not exposed, an explicit call is reported unavailable, and no
+  `mcp_tool_call` event appears.
 
 **Tests.** Template tests check the rule text is present in both canonical files and both Codex
 wrappers render it. Behaviour is covered by the live run only.
@@ -549,6 +564,20 @@ Conflicts observed in that test, which N1 resolves:
   (A2: exit 1 with stderr).
 - `node .ai/tools/hooks-selftest.mjs` runs each installed hook with known inputs (allowed and
   blocked) and reports pass/fail; validate runs it and fails on any failure.
+- VERIFIED 2026-10-15 (Codex CLI 0.162.1, Desktop 26.1007.9446.0): before every sandboxed
+  command, the elevated sandbox's setup refresh re-validates the ACLs on the Desktop app's
+  `cua_node` runtime (`...\runtimes\cua_node\<hash>\`). Any file a running Desktop process holds
+  open fails with os error 32 (seen: `node_repl.exe`, and `VCRUNTIME140_1.dll` held by
+  `codex-computer-use-swift.exe`), and every sandboxed command fails. The app keeps these
+  processes when closed to the tray. Fully quit: `pwd` succeeds and writes are denied by the
+  sandbox. Reopened: it fails again, so the app must be quit before every Codex lane run. No flag
+  avoids it: disabling MCP, apps, plugins, browser and computer use does not; disabling
+  `code_mode_host` disables commands entirely.
+- The doctor detects any running process from the Codex Desktop package or its `cua_node`
+  runtime, including an app closed to the tray, and, when a sandboxed probe fails, reads the
+  newest `~/.codex/.sandbox/sandbox.<date>.log` and reports the first `setup refresh` error
+  verbatim. It never reads `~/.codex/.sandbox-secrets/` or `auth.json`. Then it stops and asks;
+  no fallback to full access.
 - Tests: R72 self-test passes on the fixture; R73 a broken hook script makes validate fail.
 
 ### Decisions log (maintainer, 2026-10-14)
@@ -559,6 +588,7 @@ Conflicts observed in that test, which N1 resolves:
 | N7       | Missing gitleaks stops the push                                                                                                                                                                                                                                                                               |
 | D1 / OTP | OTP values may be logged in every environment; never returned in a response or error body, never sent to a third party. Recorded as an accepted risk: anyone with read access to the log tables can use a logged OTP within its validity window. Mitigation outside the skill: keep log-table access minimal. |
 | Reviews  | The review lane is the review of record; CodeRabbit runs when asked by name and on the GitHub PR                                                                                                                                                                                                              |
+| N6 / F15 | `.env.example` holds key names only, no secrets; the skill may read and edit it. Every other `.env*` file stays denied.                                                                                                                                                                                       |
 
 ---
 
