@@ -1163,8 +1163,10 @@ plan critique raised two more. The maintainer decided each one; they bind the rc
 - **Q5 - release procedure.** A script produces each release:
   1. Release identity: the git tree id of `project-setup/` at the tag
      (`git rev-parse <tag>:project-setup`).
-  2. Archive: `git archive --format=zip --prefix=project-setup/ <tag>:project-setup`, so entry
-     times are the commit time and the archive is reproducible.
+  2. Archive: `git archive --format=zip <tag> project-setup/`. Entries sit under
+     `project-setup/`, and because the input is a commit, git stamps them with the commit time, so
+     the archive is reproducible. (Corrected 2026-10-15, plan question DQ1: the first wording
+     passed a tree, `<tag>:project-setup`, for which git uses the current time.)
   3. The release notes record tag, commit, tree id and archive SHA256; the zip is attached to the
      GitHub release.
   4. v2.0.0 keeps its recorded provenance (see Baseline) and is not rebuilt.
