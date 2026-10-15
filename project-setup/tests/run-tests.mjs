@@ -1,18 +1,41 @@
 #!/usr/bin/env node
 // Regression + success-path suite for project-setup. Self-contained, zero dependencies.
-//   node tests/run-tests.mjs [--keep] [--only <substring>]
+//   node tests/run-tests.mjs [--keep] [--only <substring> | --only-id <id>]
+// --only keeps the diagnostic substring match against "<id> <name>"; --only-id selects exactly one case ID (the
+// acceptance gate uses only --only-id). The two are mutually exclusive. Unknown options, missing or empty values,
+// duplicate options, duplicate case IDs and an empty selection all exit 1 before any case runs.
 // Every fixture lives under a fresh temp directory. HOME/USERPROFILE are redirected there, and git
 // global/system config is isolated, so the suite never reads or writes the real user environment.
-// Exit code: 0 all passed · 1 at least one failure. Skipped tests are listed and never count as passed.
+// Output: one record per case ("PASS|FAIL  <id>  <name>", "SKIP  <id>  <name>  (<reason>)"), then
+// "<P> PASS / <F> FAIL / <S> SKIP", then the one-line JSON envelope { env, summary, resultsFile } last.
+// Exit code: 0 all passed; 1 at least one failure or a usage, selection or evidence-write error.
+// Skipped tests are listed and never count as passed; a failing case is never reported as skipped.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { selectSuiteCases, runComponentAssertions } from './rc1-cases.mjs';
 
 const SKILL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
-const only = argv.includes('--only') ? argv[argv.indexOf('--only') + 1] : null;
+// Validated before the temp directory exists, so a usage error leaves nothing behind.
+const cli = (() => {
+  const o = { keep: false, only: null, onlyId: null };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--keep' && !o.keep) { o.keep = true; continue; }
+    const key = a === '--only' ? 'only' : a === '--only-id' ? 'onlyId' : null;
+    const v = argv[i + 1];
+    if (!key || o[key] !== null || v === undefined || v === '' || v.startsWith('--')) return null;
+    o[key] = v; i++;
+  }
+  return o.only !== null && o.onlyId !== null ? null : o;
+})();
+if (!cli) {
+  process.stderr.write('usage: node tests/run-tests.mjs [--keep] [--only <substring> | --only-id <id>]\n');
+  process.exit(1);
+}
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ps-tests-'));
 const HOME = path.join(TMP, 'home');
 fs.mkdirSync(HOME);
@@ -67,7 +90,10 @@ function linkDir(target, link) {
 }
 
 const tests = [];
-const test = (id, name, fn) => tests.push({ id, name, fn });
+const test = (id, name, fn) => {
+  if (tests.some((t) => t.id === id)) throw Object.assign(new Error(`SUITE_DUPLICATE_ID: ${id}`), { code: 'SUITE_DUPLICATE_ID' });
+  tests.push({ id, name, fn });
+};
 
 // ============================================================ regressions ====
 test('R01', 'git-safe blocks object forms that bypass pathspec excludes', () => {
@@ -1179,7 +1205,7 @@ test('S06', 'env-keys never opens .env and never prints values', () => {
   check(k.code === 0 && !k.stdout.includes('Sup3rSecretValue') && k.json.possibleRealSecrets.includes('DB_PASSWORD'), 'names + classification only', k);
 });
 
-test('S07', 'installer happy path: install, unchanged rerun, upgrade, verify, rollback', () => {
+test('S07', 'installer happy path: install, unchanged rerun, upgrade, verify, rollback', async () => {
   const src = sourceCopy('8.0.0-a'); const c = path.join(TMP, `c-${n}`), x = path.join(TMP, `x-${n}`); const a = ['--claude-dir', c, '--codex-dir', x];
   check(inst(src, ['--dry-run', ...a]).code === 0 && !fs.existsSync(path.join(c, 'project-setup')), 'dry run changes nothing');
   check(inst(src, a).code === 0, 'install');
@@ -1191,6 +1217,12 @@ test('S07', 'installer happy path: install, unchanged rerun, upgrade, verify, ro
   put(path.join(HOME, '.claude', 'plugins', 'm', 'skills', 'project-setup', 'SKILL.md'), 'x\n');
   check(inst(src, a).code === 2, 'plugin copy stops install');
   fs.rmSync(path.join(HOME, '.claude'), { recursive: true, force: true });
+  // C11a component assertions (v2 baselines and test infrastructure) run inside S07. Their sub-assertion records are
+  // not printed here; S07 fails unless the whole component report is ok.
+  const context = { repository: path.resolve(SKILL, '..'), skillRoot: SKILL, tmp: path.join(TMP, 'c11a'), env: { ...ENV } };
+  fs.mkdirSync(context.tmp);
+  const rep = await runComponentAssertions('C11a', context);
+  check(rep.ok === true, 'C11a component assertions pass', { errors: rep.errors, failed: rep.results.filter((r) => r.status !== 'PASS').map((r) => ({ id: r.id, failures: r.failures.slice(0, 5) })) });
 });
 
 test('S08', 'canary setup/probe/verify measure readability', () => {
@@ -1212,12 +1244,19 @@ test('S09', 'rejects writes outside documentation scope and through secret draft
 });
 
 // ================================================================ runner ====
-for (const t of tests) {
-  if (only && !`${t.id} ${t.name}`.includes(only)) continue;
+// Selection happens before any case runs: duplicates, malformed cases and an empty selection exit 1 at once.
+let selected;
+try { selected = selectSuiteCases(tests, { only: cli.only, onlyId: cli.onlyId }); } catch (e) {
+  process.stderr.write(`run-tests: ${e.message}\n`);
+  fs.rmSync(TMP, { recursive: true, force: true });
+  process.exit(1);
+}
+for (const t of selected) {
   current = { id: t.id, name: t.name, failures: [], skipped: null };
-  try { t.fn(); } catch (e) { current.failures.push(`threw: ${e.stack || e}`); }
+  try { await t.fn(); } catch (e) { current.failures.push(`threw: ${e.stack || e}`); }
+  if (current.failures.length) current.skipped = null; // failures take precedence over a skip
   results.push(current);
-  const tag = current.skipped ? 'SKIP' : current.failures.length ? 'FAIL' : 'PASS';
+  const tag = current.failures.length ? 'FAIL' : current.skipped ? 'SKIP' : 'PASS';
   process.stdout.write(`${tag}  ${t.id}  ${t.name}${current.skipped ? `  (${current.skipped})` : ''}\n`);
   for (const f of current.failures) process.stdout.write(`        - ${f}\n`);
 }
@@ -1226,8 +1265,13 @@ const summary = {
   failed: results.filter((r) => r.failures.length).length,
   skipped: results.filter((r) => r.skipped).length,
 };
+process.stdout.write(`${summary.passed} PASS / ${summary.failed} FAIL / ${summary.skipped} SKIP\n`);
 const env = { platform: process.platform, release: os.release(), node: process.version, git: git(['--version'], TMP).stdout.trim() };
-fs.writeFileSync(path.join(TMP, 'results.json'), JSON.stringify({ env, summary, results }, null, 2));
-process.stdout.write(`\n${JSON.stringify({ env, summary, resultsFile: path.join(TMP, 'results.json') })}\n`);
-if (!argv.includes('--keep') && !summary.failed) fs.rmSync(TMP, { recursive: true, force: true });
+const resultsFile = path.join(TMP, 'results.json');
+try { fs.writeFileSync(resultsFile, JSON.stringify({ env, summary, results }, null, 2), { flag: 'wx' }); } catch (e) {
+  process.stderr.write(`run-tests: evidence-write: ${e.message}\n`);
+  process.exit(1);
+}
+process.stdout.write(`\n${JSON.stringify({ env, summary, resultsFile })}\n`);
+if (!cli.keep && !summary.failed) fs.rmSync(TMP, { recursive: true, force: true });
 process.exit(summary.failed ? 1 : 0);

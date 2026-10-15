@@ -1,39 +1,100 @@
 #!/usr/bin/env node
 // Creates throwaway fixture repos for live Claude/Codex acceptance testing. Synthetic content only.
 //
-//   node tests/live/make-fixture.mjs --out <new or empty dir> [--kind fresh|v1|both] [--meta <dir>]
+//   node tests/live/make-fixture.mjs --out <new or empty dir> [--kind fresh|v1|both|v2] [--meta <dir>]
 //
 // Outputs
 //   <out>/fixture-fresh, <out>/fixture-v1   git repos; the skill under test is copied to repo-level
 //                                           .claude/skills and .agents/skills only (git-excluded)
+//   <out>/fixture-v2                        (--kind v2 only) a genuine v2.0.0 installation made by the tagged
+//                                           project-setup-v2.0.0 scripts (tests/helpers/v2-baseline.mjs), committed
+//                                           and tagged fx-base; the skill under test is copied the same way.
+//                                           Needs the trusted local tag: a missing or moved tag fails with
+//                                           "v2-baseline: <code>" on stderr, never a fetch, skip or fallback.
 //   <out>/.fixture-git/                     isolated git config, empty hooks dir, empty template dir
 //   <out>/live-env.ps1, <out>/live-env.sh   env to load in every live-test terminal (same git isolation)
 //   <meta> (default "<out>.meta")           fixture-meta.json + oracle/: which change is defective and the
 //                                           executed proof. Kept OUTSIDE <out> so a session started in a
-//                                           fixture does not see the expected answer.
+//                                           fixture does not see the expected answer. For v2 it records
+//                                           fixtures.v2.provenance (tag, commit, tree, commands, plan and
+//                                           manifest digests); --kind v2 requires <out> and <meta> not to exist.
 //
 // Git isolation: all inherited GIT_* variables are dropped; system config is ignored; global config is a
 // generated file; hooks and templates point at empty directories; commit/tag signing is off; author and committer
 // dates are fixed. The same settings are also written to each repo's local config.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { randomInt } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { verifyV2Tag, createV2InstalledFixture } from '../helpers/v2-baseline.mjs';
 
 const SKILL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(`--${k}`); return i === -1 ? d : args[i + 1]; };
-if (!opt('out')) { console.error('usage: make-fixture.mjs --out <dir> [--kind fresh|v1|both] [--meta <dir>]'); process.exit(1); }
+if (!opt('out')) { console.error('usage: make-fixture.mjs --out <dir> [--kind fresh|v1|both|v2] [--meta <dir>]'); process.exit(1); }
 const out = path.resolve(opt('out'));
 const meta = path.resolve(opt('meta', `${out}.meta`));
 const kind = opt('kind', 'both');
-for (const d of [out, meta]) {
-  if (fs.existsSync(d) && fs.readdirSync(d).length) { console.error(`refusing: ${d} is not empty`); process.exit(1); }
-  fs.mkdirSync(d, { recursive: true });
+if (!['fresh', 'v1', 'both', 'v2'].includes(kind)) { console.error(`refusing: unknown --kind ${kind}`); process.exit(1); }
+const exists = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
+// Resolves the longest existing ancestor through realpath (following junctions and symlinks), then appends the rest.
+const canonical = (p) => {
+  let cur = path.resolve(p); const rest = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(cur), ...rest.reverse()); } catch {
+      const up = path.dirname(cur);
+      if (up === cur) return path.resolve(p);
+      rest.push(path.basename(cur)); cur = up;
+    }
+  }
+};
+// --meta must be outside --out, compared canonically. Outside means the relative path is exactly "..", starts with
+// ".." plus a separator, or is absolute: "<out>/..meta" is inside.
+const metaRel = path.relative(canonical(out), canonical(meta));
+if (!(/^\.\.([\\/]|$)/.test(metaRel) || path.isAbsolute(metaRel))) { console.error('refusing: --meta must be outside --out'); process.exit(1); }
+if (kind === 'v2') {
+  // v2 needs unused destinations whose parents exist, and the trusted local tag is verified before anything is created.
+  for (const d of [out, meta]) {
+    if (exists(d)) { console.error(`refusing: ${d} already exists`); process.exit(1); }
+    let parent = null; try { parent = fs.statSync(path.dirname(d)); } catch { /* reported below */ }
+    if (!parent || !parent.isDirectory()) { console.error(`refusing: the parent of ${d} does not exist`); process.exit(1); }
+  }
 }
-const rel = path.relative(out, meta);
-if (!rel.startsWith('..') && !path.isAbsolute(rel)) { console.error('refusing: --meta must be outside --out'); process.exit(1); }
+const REPOSITORY = path.resolve(SKILL, '..');
+const v2Fail = (e, kept) => {
+  process.stderr.write(`v2-baseline: ${e && typeof e.code === 'string' && /^V2_/.test(e.code) ? e.code : 'V2_UNEXPECTED'}\n`);
+  if (kept) process.stderr.write(`v2-baseline: tagged source kept at ${kept}\n`);
+  process.exit(1);
+};
+// Set once the v2 helper has succeeded and cleared only after every output is written: any later failure exits 1 and
+// reports the retained tagged source after the error (decision H5).
+let keptSource = null;
+const keepSourceOnFailure = (dir) => {
+  keptSource = dir;
+  process.on('uncaughtException', (e) => {
+    process.stderr.write(`make-fixture: ${e && e.message ? e.message : e}\n`);
+    if (keptSource) process.stderr.write(`v2-baseline: tagged source kept at ${keptSource}\n`);
+    process.exit(1);
+  });
+};
+if (kind === 'v2') {
+  try { await verifyV2Tag({ repository: REPOSITORY }); } catch (e) { v2Fail(e); }
+  // Exclusive, non-recursive creation: an entry of any kind that appeared after the check is refused, not reused.
+  for (const d of [out, meta]) {
+    try { fs.mkdirSync(d); } catch (e) {
+      console.error(`refusing: cannot create ${d} (${e.code || e.message})`);
+      if (d === meta) { try { fs.rmdirSync(out); } catch { /* leave it; it is empty or not ours */ } }
+      process.exit(1);
+    }
+  }
+} else {
+  for (const d of [out, meta]) {
+    if (fs.existsSync(d) && fs.readdirSync(d).length) { console.error(`refusing: ${d} is not empty`); process.exit(1); }
+    fs.mkdirSync(d, { recursive: true });
+  }
+}
 
 // ---------------------------------------------------------------- git isolation
 const G = path.join(out, '.fixture-git');
@@ -290,7 +351,19 @@ for (const k of kind === 'both' ? ['fresh', 'v1'] : [kind]) {
     put(root, '.claude/settings.json', JSON.stringify({ permissions: { allow: ['Bash(git status)'], deny: ['Read(.env)', 'Bash(DROP DATABASE *)'] }, hooks: { PostToolUse: [{ matcher: 'Write|Edit', command: 'npx eslint --fix "$CLAUDE_FILE_PATH" || true' }] } }, null, 2) + '\n');
     put(root, '.claudeignore', '.env\nnode_modules/\n');
   }
-  const base = commitAll(root, `chore: initial ${k} fixture`);
+  let provenance = null;
+  if (k === 'v2') {
+    // The application is committed first (the manifest records that commit), then the tagged v2.0.0 scripts install
+    // into it. The tagged source is extracted under the OS temp directory, outside <out> and the project; it is
+    // deleted only after every output is written and kept (path printed) on any failure.
+    commitAll(root, 'chore: initial v2 fixture application');
+    const workDir = path.join(os.tmpdir(), `ps-v2-source-${process.pid}-${randomBytes(6).toString('hex')}`);
+    try {
+      ({ provenance } = await createV2InstalledFixture({ repository: REPOSITORY, root, workDir, projectName: 'fixture-wallet-api' }));
+    } catch (e) { v2Fail(e, exists(workDir) ? workDir : null); }
+    keepSourceOnFailure(workDir);
+  }
+  const base = commitAll(root, k === 'v2' ? 'chore: install project-setup v2.0.0 baseline' : `chore: initial ${k} fixture`);
   git(root, 'tag', 'fx-base');
   const entry = { path: root, base };
   if (k === 'fresh') {
@@ -342,6 +415,7 @@ for (const k of kind === 'both' ? ['fresh', 'v1'] : [kind]) {
     unsignedHead: !/^gpgsig /m.test(git(root, 'cat-file', '-p', 'HEAD')),
   };
   if (entry.isolation.sampleHooksInGitDir || !entry.isolation.unsignedHead || entry.isolation.gpgsign !== 'false') throw new Error(`git isolation self-check failed: ${JSON.stringify(entry.isolation)}`);
+  if (provenance) entry.provenance = provenance; // metadata only, outside the fixture tree
   metaOut.fixtures[k] = entry;
   made.push(root);
 }
@@ -366,6 +440,8 @@ fs.writeFileSync(path.join(out, 'live-env.sh'), [
   'export GIT_TERMINAL_PROMPT=0',
   '',
 ].join('\n'));
+// Every output is written: only now is the extracted v2 source removed.
+if (keptSource) { fs.rmSync(keptSource, { recursive: true, force: true }); keptSource = null; }
 
 const fresh = metaOut.fixtures.fresh;
 console.log(JSON.stringify({
