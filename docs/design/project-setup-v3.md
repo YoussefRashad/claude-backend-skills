@@ -1177,3 +1177,11 @@ plan critique raised two more. The maintainer decided each one; they bind the rc
   (contact-rewards-backend, PR #2009) is updated together with the skill.
 - **Q7 - what the doctor runs.** The doctor runs `codex mcp list --json` with the lane flags, reads
   the newest sandbox log and checks for Codex Desktop processes. It never starts a model session.
+- **PQ1 - where `**` may appear (C1 plan question).** `**` is valid only as a whole path component:
+  `**/x`, `x/**`, `a/**/b`. A `**` joined to other characters (`a**b`, `key**.pem`) and any run of
+  three or more stars fail validation with a message pointing to `*` or a separate `**/`
+  component. Reason: v2's two matchers disagree on such forms (`scripts/lib.mjs:84-90` crosses
+  `/`, `scripts/globs.mjs:21` does not), and each rendered control could read them differently,
+  so one pattern could hide a file from one tool and expose it to another. No existing project is
+  affected: the v2 base list and all 23 patterns in contact-rewards-backend's
+  `.ai/security-paths.json` (checked 2026-10-15) use `**` only as whole components.
