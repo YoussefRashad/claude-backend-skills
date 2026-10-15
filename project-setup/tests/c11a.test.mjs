@@ -455,6 +455,94 @@ function checkHostileGone(check, label, calls, hostile) {
   });
 }
 
+// ============================================ review-defect support (R1-R8) ====
+// Shared by the tests that cover the eight defects a review found after the first implementation. Each test that uses them quotes the
+// plan clause or maintainer decision (H1-H6, docs/plans/2026-10-15-project-setup-v3-rc1-c11a-review-decisions.md) it rests on.
+// Makes the named filesystem operations fail with EACCES for exactly one path while fn runs: the synchronous, callback and promise forms.
+// The helper under test shares this process's fs module, so this is a real fault at the boundary of the code being tested; nothing in the
+// helper's interface is involved. Returns the attempt result of fn and the operations that were actually hit.
+async function withFsFault(target, operations, fn) {
+  const norm = (p) => { if (typeof p !== 'string') return null; const r = path.resolve(p); return process.platform === 'win32' ? r.toLowerCase() : r; };
+  const want = norm(target), saved = [], hits = [];
+  const fail = (op, p) => Object.assign(new Error(`EACCES: permission denied, ${op} '${p}'`), { errno: -13, code: 'EACCES', syscall: op, path: String(p) });
+  const patch = (obj, name, wrap) => { if (typeof obj[name] !== 'function') return; saved.push([obj, name, obj[name]]); obj[name] = wrap(obj[name]); };
+  for (const op of operations) {
+    patch(fs, `${op}Sync`, (orig) => function (p, ...rest) { if (norm(p) === want) { hits.push(`${op}Sync`); throw fail(op, p); } return orig.call(this, p, ...rest); });
+    patch(fs, op, (orig) => function (p, ...rest) { if (norm(p) === want) { hits.push(op); const cb = rest.find((x) => typeof x === 'function'); process.nextTick(() => { if (cb) cb(fail(op, p)); }); return undefined; } return orig.call(this, p, ...rest); });
+    patch(fs.promises, op, (orig) => function (p, ...rest) { if (norm(p) === want) { hits.push(`promises.${op}`); return Promise.reject(fail(op, p)); } return orig.call(this, p, ...rest); });
+  }
+  try { return { result: await attempt(fn), hits }; } finally { for (const [obj, name, orig] of saved.reverse()) obj[name] = orig; }
+}
+// A full inventory of a tree without following links: every directory (empty ones included), every file with its hash, and every link entry
+// (junction or symlink) with its target text. treeHashes lists files only, so a directory created or removed beneath a tree goes unseen by it.
+function inventoryOf(dir) {
+  const out = {};
+  const walk = (d, rel) => {
+    let names = []; try { names = fs.readdirSync(d).sort(); } catch { out[rel || '.'] = 'unreadable'; return; }
+    for (const name of names) {
+      const p = path.join(d, name), r = rel ? `${rel}/${name}` : name;
+      let st; try { st = fs.lstatSync(p); } catch { out[r] = 'unreadable'; continue; }
+      if (st.isSymbolicLink()) out[r] = `link:${fs.readlinkSync(p)}`;
+      else if (st.isDirectory()) { out[r] = 'dir'; walk(p, r); }
+      else out[r] = `file:${sha256(fs.readFileSync(p))}`;
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+// Decision H5: the retained-path line is exactly "v2-baseline: tagged source kept at <absolute path>". Returns the path of the one such
+// line, or null when the line is absent or repeated.
+function keptLinePath(stderr) {
+  const prefix = 'v2-baseline: tagged source kept at ';
+  const hits = String(stderr).split(/\r?\n/).filter((l) => l.startsWith(prefix));
+  return hits.length === 1 && hits[0].length > prefix.length ? hits[0].slice(prefix.length) : null;
+}
+// Preload for make-fixture.mjs only (tagged scripts and git are untouched): PS_C11A_LATE_FAIL=tag makes `git tag fx-base` fail, and
+// PS_C11A_LATE_FAIL=last makes the final write of the run (live-env.sh) throw. Both happen after the v2 helper has already succeeded.
+const LATE_FAIL_PRELOAD = [
+  "const path = require('node:path');",
+  "if (path.basename(String(process.argv[1] || '')) === 'make-fixture.mjs') {",
+  "  const mode = process.env.PS_C11A_LATE_FAIL;",
+  "  const cp = require('node:child_process'), fs = require('node:fs');",
+  "  const spawnSync = cp.spawnSync;",
+  "  cp.spawnSync = function (cmd, args) {",
+  "    if (mode === 'tag' && cmd === 'git' && Array.isArray(args) && args.includes('tag') && args.includes('fx-base')) return { status: 1, signal: null, pid: 0, output: [null, '', 'injected failure'], stdout: '', stderr: 'injected failure', error: undefined };",
+  "    return spawnSync.apply(this, arguments);",
+  "  };",
+  "  const writeFileSync = fs.writeFileSync;",
+  "  fs.writeFileSync = function (file) {",
+  "    if (mode === 'last' && /live-env\\.sh$/.test(String(file))) throw new Error('injected failure writing ' + file);",
+  "    return writeFileSync.apply(this, arguments);",
+  "  };",
+  "  require('node:module').syncBuiltinESMExports();",
+  "}",
+].join('\n') + '\n';
+
+// Preload for make-fixture.mjs only (tagged scripts and git are untouched): the first time make-fixture calls fs.mkdirSync on exactly
+// PS_C11A_RACE_PATH, an empty directory (PS_C11A_RACE_MODE=dir) or a junction to PS_C11A_RACE_TARGET (PS_C11A_RACE_MODE=junction) is created at
+// that path immediately before the real call, and a marker file is written to PS_C11A_RACE_MARK. It models a destination that appears after the
+// script's initial existence check.
+const RACE_PRELOAD = [
+  "const path = require('node:path');",
+  "if (path.basename(String(process.argv[1] || '')) === 'make-fixture.mjs' && process.env.PS_C11A_RACE_PATH) {",
+  "  const fs = require('node:fs');",
+  "  const norm = (p) => { const r = path.resolve(String(p)); return process.platform === 'win32' ? r.toLowerCase() : r; };",
+  "  const want = norm(process.env.PS_C11A_RACE_PATH);",
+  "  const mkdirSync = fs.mkdirSync, symlinkSync = fs.symlinkSync, writeFileSync = fs.writeFileSync;",
+  "  let fired = false;",
+  "  fs.mkdirSync = function (p) {",
+  "    if (!fired && typeof p === 'string' && norm(p) === want) {",
+  "      fired = true;",
+  "      if (process.env.PS_C11A_RACE_MODE === 'junction') symlinkSync.call(fs, process.env.PS_C11A_RACE_TARGET, p, 'junction');",
+  "      else mkdirSync.call(fs, p);",
+  "      writeFileSync.call(fs, process.env.PS_C11A_RACE_MARK, 'fired\\n');",
+  "    }",
+  "    return mkdirSync.apply(this, arguments);",
+  "  };",
+  "  require('node:module').syncBuiltinESMExports();",
+  "}",
+].join('\n') + '\n';
+
 // ================================================ V2/C11a/tag-identity ====
 async function tagIdentity(context) {
   return runAssertion(async ({ failures, check, step }) => {
@@ -729,6 +817,35 @@ async function snapshotInventory(context) {
       }
       const again = await attempt(run);
       check(!again.threw, 'the copy verifies again after every restore', again.threw ? { code: again.error && again.error.code } : null);
+    });
+    // R5. Plan 3.4: "Enumerate without following links ... Every candidate file must be mapped ... an unmapped future version also requires an
+    // explicit mapping rather than escaping enumeration"; plan 4.1 (unmapped candidate -> V2_SNAPSHOT_UNMAPPED); architecture plan C11a: "unmapped
+    // versioned data fails". Verification is only as good as its traversal: a directory that cannot be listed, or an entry that cannot be
+    // inspected, would let an unmapped versioned file escape, so such a failure must fail the verification, never pass it silently.
+    // Decision H3: a failure to list or stat any entry while enumerating data/ fails verification with V2_SNAPSHOT_UNREADABLE, phase null (no
+    // tagged script runs, G4), carrying the path relative to the skill root; verification succeeds only after a complete traversal.
+    await step('R5 an enumeration or stat failure under data/ fails verification instead of passing it', async () => {
+      const skill = copySkill(scope, context);
+      const exec = makeCachedExec();
+      const run = () => h.verifyV2Snapshots({ repository: context.repository, skillRoot: skill, execute: exec });
+      const abs = (rel) => path.join(skill, ...rel.split('/'));
+      write(abs('data/archive/extra-v3.0.0.json'), 'hidden unmapped candidate\n');
+      try {
+        await expectCode(check, 'control: with no fault the hidden unmapped candidate is found', run, 'V2_SNAPSHOT_UNMAPPED');
+        const faults = [
+          ['data/ itself cannot be listed', abs('data'), ['readdir', 'opendir'], 'data'],
+          ['data/archive cannot be listed (a versioned candidate sits inside it)', abs('data/archive'), ['readdir', 'opendir'], 'data/archive'],
+          ['data/archive cannot be inspected (a versioned candidate sits inside it)', abs('data/archive'), ['lstat', 'stat'], 'data/archive'],
+        ];
+        for (const [label, target, ops, rel] of faults) {
+          // A result here means the traversal skipped a part of data/ that could not be read and verified the rest: that is the defect.
+          const { result } = await withFsFault(target, ops, run);
+          const e = expectFail(check, `fault: ${label}`, result, 'V2_SNAPSHOT_UNREADABLE');
+          check(!!e && String(e.message).split(path.sep).join('/').includes(rel), `fault: ${label}: the message carries the path relative to the skill root (${rel})`, e && e.message);
+        }
+      } finally { rmrf(abs('data/archive')); }
+      const clean = await attempt(run);
+      check(!clean.threw, 'after the faults and the cleanup the copy verifies again', clean.threw ? { code: clean.error && clean.error.code } : null);
     });
   });
 }
@@ -1421,6 +1538,121 @@ async function fixtureFailures(context) {
         check(listFiles(holder).length === 0 && rec.calls.every((c) => !c.isNode), `an executor that throws on ${where}: nothing written, nothing run`);
       }
     });
+
+    // ----- review defects R1-R3 -----
+    // R1. Plan 3.6 (stage drafts), G4, G6 ("every destination the C11a helpers write to must not exist ... refuses an existing path of any kind")
+    // and decision H1: when any path the helper is about to stage beneath the drafts directory already exists (a file, a directory, a junction
+    // or a symlink, at any depth), it fails with V2_DESTINATION_EXISTS and phase init, before it writes any draft; nothing is written through a
+    // link, the drafts directory is left as it was and nothing outside the project changes. The drafts directory is created by the tagged init,
+    // so the pre-existing path appears after init and before staging: the executor result of init is returned untouched and the path is put in
+    // place right after it. No later phase runs, and the failed fixture keeps its diagnostic state (plan 3.6).
+    await step('R1 draft staging refuses a pre-existing draft path before it writes anything', async () => {
+      const junctionAt = (st, name) => {
+        fs.mkdirSync(st.outside, { recursive: true }); write(path.join(st.outside, 'keep.txt'), 'keep\n');
+        st.outsideBefore = inventoryOf(st.outside); st.linkPath = path.join(st.drafts, name);
+        return tryLink(st.outside, st.linkPath, 'junction');
+      };
+      const variants = [
+        ['a junction at drafts/.ai that leads to an outside directory', (st) => junctionAt(st, '.ai')],
+        ['a junction at drafts/docs that leads to an outside directory', (st) => junctionAt(st, 'docs')],
+        ['a regular file at drafts/AGENTS.md', (st) => { write(path.join(st.drafts, 'AGENTS.md'), 'user draft\n'); return true; }],
+        ['a regular file at drafts/.ai/agents/reviewer.md', (st) => { write(path.join(st.drafts, '.ai', 'agents', 'reviewer.md'), 'user draft\n'); return true; }],
+        ['an empty directory at drafts/docs', (st) => { fs.mkdirSync(path.join(st.drafts, 'docs')); return true; }],
+        ['a directory at drafts/.ai/agents/reviewer.md where a file is staged', (st) => { fs.mkdirSync(path.join(st.drafts, '.ai', 'agents', 'reviewer.md'), { recursive: true }); return true; }],
+        ['a junction at drafts/.ai/agents inside a real drafts/.ai (depth two)', (st) => { fs.mkdirSync(path.join(st.drafts, '.ai')); return junctionAt(st, '.ai/agents'); }],
+      ];
+      for (const [label, setup] of variants) {
+        const prep = prepareProject(scope, {});
+        const st = { runDir: path.join(prep.root, '.ai', '.run', RUN_ID), drafts: path.join(prep.root, '.ai', '.run', RUN_ID, 'drafts'), outside: scope.sub('outside'), snap: null, made: null, linkPath: null, outsideBefore: null };
+        const exec = makeExec(faultAt('init', (call, real) => { const r = real(); st.made = setup(st); st.snap = inventoryOf(st.drafts); return r; }));
+        const run = { prep, exec, r: await callFixture(h, context, prep, {}, exec) };
+        const L = `staging with ${label}`;
+        if (st.snap === null || st.made !== true) { check(false, `${L}: the pre-existing draft path could be put in place after init (test setup)`, { snap: st.snap !== null, made: st.made }); continue; }
+        expectFail(check, L, run.r, 'V2_DESTINATION_EXISTS', { phase: 'init' });
+        // The inventory lists directories, files (with hashes) and link entries without following links, so an empty staging directory created
+        // before the refusal, or a pre-existing empty directory removed by it, is a difference too.
+        check(eq(inventoryOf(st.drafts), st.snap), `${L}: nothing was staged: the drafts directory is exactly as it was before staging (directories, files and links)`, { now: Object.keys(inventoryOf(st.drafts)).slice(0, 8), was: Object.keys(st.snap).slice(0, 8) });
+        check(!exists(path.join(st.runDir, 'fixture-allows.json')), `${L}: no allow-file was written`);
+        if (st.linkPath) check(kindOf(st.linkPath) === 'link' && eq(inventoryOf(st.outside), st.outsideBefore), `${L}: the outside directory is unchanged: nothing was written through the junction`, Object.keys(inventoryOf(st.outside)));
+        const now = treeHashes(prep.root);
+        check(eq(Object.keys(now).filter((k) => !k.startsWith('.ai/')).sort(), Object.keys(prep.before).sort()) && Object.entries(prep.before).every(([k, v]) => now[k] === v), `${L}: nothing was written in the project outside .ai/`, Object.keys(now).filter((k) => !k.startsWith('.ai/')).slice(0, 8));
+        stopsAt(L, run, 'init'); preserved(L, run, 'init');
+        if (st.linkPath) rmrf(st.linkPath);
+      }
+    });
+
+    // R2. Plan 3.6 ("workDir is unused, outside root, and not an alias resolving into root") and plan 4.2 ("workDir === root or beneath root ->
+    // V2_WORKDIR_INSIDE_PROJECT; no writes", "Work-directory alias resolves inside root -> V2_WORKDIR_INSIDE_PROJECT; no writes"): the refusal
+    // comes before any write and its phase is null. Decision H4: a path is outside a parent only when the relative path is exactly "..", starts
+    // with ".." followed by a separator, or is absolute; a name that merely begins with two dots, such as <root>/..work, is inside. The work
+    // directory check compares canonical paths (each resolved through its longest existing ancestor, following junctions), so the alias
+    // variants hide the same directory behind a junction in an ancestor position or give root itself through an alias.
+    await step('R2 a work directory named ..work inside the project is inside the project', async () => {
+      const refused = async (label, prep, workAt) => {
+        const exec = makeExec();
+        const res = await callFixture(h, context, prep, {}, exec);
+        expectFail(check, `work directory ${label}`, res, 'V2_WORKDIR_INSIDE_PROJECT');
+        check(eq(treeHashes(prep.root), prep.before) && nodeCalls(exec.calls).length === 0 && !exists(workAt), `work directory ${label}: no writes happened and no script ran`, listFiles(prep.root, true).slice(0, 8));
+      };
+      for (const name of ['..work', '...work']) {
+        const prep = prepareProject(scope, {}); prep.work = path.join(prep.root, name);
+        await refused(`<root>/${name}`, prep, prep.work);
+      }
+      const prep = prepareProject(scope, {});
+      const alias = path.join(prep.base, 'rootalias');
+      const made = tryLink(prep.root, alias, 'junction');
+      check(made, 'a junction that leads to the project root can be created');
+      if (made) {
+        await refused('<junction to root>/..work (the alias hides the containment)', { ...prep, work: path.join(alias, '..work') }, path.join(prep.root, '..work'));
+        await refused('<real root>/work with root given through the junction', { ...prep, root: alias, work: path.join(prep.root, 'work') }, path.join(prep.root, 'work'));
+        rmrf(alias);
+      }
+      // Control: a sibling directory named ..work next to the project is outside it and must still be accepted.
+      const out = prepareProject(scope, {}); out.work = path.join(out.base, '..work');
+      const exec = makeExec();
+      const res = await callFixture(h, context, out, {}, exec);
+      check(!res.threw && eq(plain(res.value.installed), TARGET_ENTRIES), 'control: a sibling ..work directory outside the project is accepted and the fixture is installed', res.threw ? { code: res.error && res.error.code, message: res.error && res.error.message } : null);
+    });
+    // R2, same root cause in materialization: plan 3.5 rejects "absolute, traversal or unsafe materialization paths" and plan 4.2 materializes
+    // every regular blob to its exact bytes. By decision H4 a tagged leaf whose name only begins with two dots is not a traversal: it is a child
+    // of the destination.
+    await step('R2 a tagged leaf whose name begins with two dots is materialized, not rejected as a traversal', async () => {
+      const leaves = tagLeaves(scope, context), last = leaves[leaves.length - 1];
+      const holder = holderDir('dd'), dest = path.join(holder, 'dest'), name = '..dotdot-name.txt';
+      const rec = lsTreeMutator('last', (r) => lsRecord({ ...r, path: name }));
+      const r = await attempt(() => h.materializeV2Source(matArgs(dest, rec)));
+      check(!r.threw, `a leaf renamed to ${name} is materialized`, r.threw ? { code: r.error && r.error.code, message: r.error && r.error.message } : null);
+      const f = path.join(dest, name);
+      check(exists(f) && Buffer.compare(fs.readFileSync(f), tagBlob(scope, context, last.path)) === 0, `${name} sits directly in the destination with the blob's exact bytes`);
+      check(!exists(path.join(holder, name)), `${name} is not written outside the destination`);
+    });
+
+    // R3. Plan 3.6 preconditions ("root is an existing synthetic Git repository with an initial commit") and decision H2: root must be the
+    // top-level directory of a Git repository, and its HEAD must resolve to a commit. A root that is not a repository, is a subdirectory of
+    // another repository (the tagged scripts find the repository from the working directory and would write their lock and run files into the
+    // enclosing one) or has no commit fails with V2_OPTIONS_INVALID and phase null, before materialization, before any tagged script runs and
+    // before any write to the root, the work directory or an enclosing repository.
+    await step('R3 a root that is not an existing git repository with an initial commit is refused before any write', async () => {
+      const refuse = async (label, prep, enclosing) => {
+        const exec = makeExec(), before = enclosing ? treeHashes(enclosing) : null;
+        const res = await callFixture(h, context, prep, {}, exec);
+        expectFail(check, label, res, 'V2_OPTIONS_INVALID');
+        check(nodeCalls(exec.calls).length === 0, `${label}: no tagged script ran`, phaseSeq(exec.calls));
+        check(eq(treeHashes(prep.root), prep.before) && !exists(path.join(prep.root, '.ai')) && !exists(prep.work), `${label}: nothing was written in the root or the work directory`, listFiles(prep.root, true).slice(0, 8));
+        if (enclosing) check(eq(treeHashes(enclosing), before) && !exists(path.join(enclosing, '.ai')), `${label}: the enclosing repository got no lock or run files`, listFiles(enclosing, true).filter((f) => f.startsWith('.ai/')).slice(0, 5));
+      };
+      { const enclosing = makeProject(scope, scope.sub('enc'), { 'package.json': '{"name":"outer"}\n', 'pkg/inner/app.js': 'export {}\n' });
+        const root = path.join(enclosing, 'pkg', 'inner');
+        await refuse('root is a subdirectory of another repository', { root, work: scope.sub('work'), before: treeHashes(root) }, enclosing); }
+      { const root = scope.sub('norepo'); write(path.join(root, 'package.json'), '{"name":"plain"}\n');
+        const probe = git(scope.iso, root, ['rev-parse', '--show-toplevel']);
+        check(probe.status !== 0, 'test setup: the plain directory is not inside any git repository', probe.text);
+        await refuse('root is a directory that is not a git repository', { root, work: scope.sub('work'), before: treeHashes(root) }); }
+      { const root = scope.sub('nocommit'); fs.mkdirSync(root, { recursive: true }); mustGit(scope.iso, root, ['init', '-q'], 'git init'); write(path.join(root, 'package.json'), '{"name":"empty"}\n');
+        const probe = git(scope.iso, root, ['rev-parse', '--verify', 'HEAD']);
+        check(probe.status !== 0, 'test setup: the repository has no commit', probe.text);
+        await refuse('root is a git repository without an initial commit', { root, work: scope.sub('work'), before: treeHashes(root) }); }
+    });
   });
 }
 
@@ -1540,6 +1772,9 @@ async function liveV2(context) {
         if (exists(c) && isInside(osTmp, c) && !samePath(c, osTmp)) { kept = c; break; }
       }
       check(!!kept, 'the error prints the path of the kept extraction directory (inside the OS temp directory)', r.stderr.slice(0, 400));
+      // Decision H5: the retained-path line the helper failures use is exactly "v2-baseline: tagged source kept at <absolute path>".
+      const keptLine = keptLinePath(r.stderr);
+      check(keptLine !== null && path.isAbsolute(keptLine) && !!kept && samePath(keptLine, kept), 'stderr carries the exact line "v2-baseline: tagged source kept at <absolute path>"', r.stderr.slice(0, 400));
       if (kept) {
         check(exists(path.join(kept, 'scripts', 'lock.mjs')) || exists(path.join(kept, 'source', 'project-setup', 'scripts', 'lock.mjs')) || listFiles(kept).some((f) => /(^|\/)lock\.mjs$/.test(f)), 'the printed directory still holds the extracted tagged source', listFiles(kept).slice(0, 5));
         check(!isInside(out, kept), 'the kept directory is outside <out>');
@@ -1615,6 +1850,150 @@ async function liveV2(context) {
         for (const f of ['live-env.ps1', 'live-env.sh', path.join('.fixture-git', 'gitconfig')]) check(exists(path.join(out, f)), `${label}: ${f} is generated`);
       });
     }
+
+    // ----- review defects R2 (live), R4 and R7 -----
+    // R2 (live). Plan 3.7 ("Require unused output and metadata destinations"), plan 4.3 ("Metadata destination beneath output | Exit 1; no
+    // success result") and decision H4: a path is outside a parent only when the relative path is exactly "..", starts with ".." followed by a
+    // separator, or is absolute, so <out>/..meta is inside <out>. The metadata-beneath-output check compares canonical paths (each resolved
+    // through its longest existing ancestor, following junctions), so a --meta that reaches the output directory through a junction alias is
+    // rejected like a direct one: exit 1, no success JSON, nothing created.
+    await step('R2 --meta <out>/..meta is metadata beneath the output and is refused with nothing created', async () => {
+      for (const [label, extra] of [['--kind v2', ['--kind', 'v2']], ['the default kind', []]]) {
+        const out = scope.sub('dd'), meta = path.join(out, '..meta');
+        const r = runNode([mf, '--out', out, ...extra, '--meta', meta], context.repository, env);
+        check(r.code === 1 && noSuccessJson(r.stdout), `${label} with --meta <out>/..meta: exit 1 and no success result`, { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 200) });
+        check(!exists(out) && !exists(meta), `${label} with --meta <out>/..meta: nothing is created (no output directory, no metadata directory)`, { out: exists(out), meta: exists(meta) });
+      }
+    });
+    await step('R2 (H4) --meta reaching the output directory through a junction alias is metadata beneath the output', async () => {
+      const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+      { // v2: neither destination exists yet; the alias is an ancestor of --meta and resolves to the directory that will hold --out.
+        const target = scope.sub('aliastarget'), alias = scope.sub('alias'); fs.mkdirSync(target, { recursive: true });
+        const made = tryLink(target, alias, 'junction');
+        check(made, 'a junction to the directory that will hold --out can be created');
+        if (made) {
+          const out = path.join(target, 'o'), meta = path.join(alias, 'o', 'm');
+          const r = runNode([mf, '--kind', 'v2', '--out', out, '--meta', meta], context.repository, env);
+          check(r.code === 1 && noSuccessJson(r.stdout), '--kind v2 with --meta <junction to the parent of out>/o/m: exit 1 and no success result', { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 200) });
+          check(fs.readdirSync(target).length === 0 && !exists(out) && isLink(alias), '--kind v2 with --meta <junction to the parent of out>/o/m: nothing is created through the alias or beside it', fs.readdirSync(target).slice(0, 5));
+          rmrf(alias);
+        }
+      }
+      { // the decision's own example: --meta <junction-to-out>/m with an existing empty --out (allowed for the existing kinds).
+        const out = scope.sub('aliasout'), alias = scope.sub('alias'); fs.mkdirSync(out, { recursive: true });
+        const made = tryLink(out, alias, 'junction');
+        check(made, 'a junction to an existing empty output directory can be created');
+        if (made) {
+          const r = runNode([mf, '--kind', 'v1', '--out', out, '--meta', path.join(alias, 'm')], context.repository, env);
+          check(r.code === 1 && noSuccessJson(r.stdout), '--kind v1 with --meta <junction to out>/m: exit 1 and no success result', { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 200) });
+          check(fs.readdirSync(out).length === 0 && isLink(alias), '--kind v1 with --meta <junction to out>/m: nothing is created in the output directory or through the alias', fs.readdirSync(out).slice(0, 5));
+          rmrf(alias);
+        }
+      }
+      { // the same directory reached as --meta itself through the alias: it is the output directory, so it is not outside it.
+        const out = scope.sub('aliasout'), alias = scope.sub('alias'); fs.mkdirSync(out, { recursive: true });
+        const made = tryLink(out, alias, 'junction');
+        check(made, 'a junction to a second existing empty output directory can be created');
+        if (made) {
+          const r = runNode([mf, '--kind', 'v1', '--out', out, '--meta', alias], context.repository, env);
+          check(r.code === 1 && noSuccessJson(r.stdout), '--kind v1 with --meta <junction to out> itself: exit 1 and no success result', { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 200) });
+          check(fs.readdirSync(out).length === 0 && isLink(alias), '--kind v1 with --meta <junction to out> itself: nothing is created in the output directory', fs.readdirSync(out).slice(0, 5));
+          rmrf(alias);
+        }
+      }
+    });
+
+    // R4. Plan 3.7 ("For v2: Require unused output and metadata destinations"), plan 4.3 ("Occupied output or metadata destination | Exit 1;
+    // sentinel unchanged"), G6 and decision H6: for --kind v2 the output and metadata destinations are each created non-recursively and
+    // exclusively. Creation fails if the path exists in any form, including an empty directory, a junction or a symlink, even when it appears
+    // after the initial existence check, and nothing is written through it or beside it; a destination whose parent directory does not exist is
+    // refused with exit 1 and no parent is created. The "appears during the awaited tag verification" race is not tested: the plans give no seam
+    // to make a destination appear at that moment. The exact stderr text is not asserted.
+    await step('R4 --kind v2 refuses an existing empty or linked output or metadata destination and writes nothing through it', async () => {
+      const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+      const cases = [
+        ['an existing empty --out directory', 'out', 'dir'], ['an existing empty --meta directory', 'meta', 'dir'],
+        ['a junction at --out that leads to an empty directory', 'out', 'junction'], ['a junction at --meta that leads to an empty directory', 'meta', 'junction'],
+      ];
+      for (const [label, which, shape] of cases) {
+        const out = scope.sub('r4out'), meta = scope.sub('r4meta'), target = scope.sub('r4target');
+        const occupied = which === 'out' ? out : meta, other = which === 'out' ? meta : out;
+        let made = true;
+        if (shape === 'dir') fs.mkdirSync(occupied, { recursive: true });
+        else { fs.mkdirSync(target, { recursive: true }); made = tryLink(target, occupied, 'junction'); }
+        check(made, `${label}: the occupied destination can be created for the test`);
+        if (!made) continue;
+        const r = runNode([mf, '--kind', 'v2', '--out', out, '--meta', meta], context.repository, env);
+        check(r.code === 1 && noSuccessJson(r.stdout), `${label}: exit 1 and no success result`, { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 200) });
+        check(fs.readdirSync(shape === 'dir' ? occupied : target).length === 0, `${label}: nothing was written into the occupied destination${shape === 'dir' ? '' : ' or through the junction'}`, fs.readdirSync(shape === 'dir' ? occupied : target).slice(0, 5));
+        check(shape === 'dir' ? !isLink(occupied) && fs.statSync(occupied).isDirectory() : isLink(occupied), `${label}: the occupied destination is still what it was`);
+        check(!exists(other), `${label}: the other destination was not created`, { other: exists(other) });
+        if (shape !== 'dir') rmrf(occupied);
+      }
+      const base = scope.sub('r4base'); fs.mkdirSync(base, { recursive: true });
+      for (const [label, out, meta, missing] of [
+        ['--out beneath a directory that does not exist', path.join(base, 'no-such-out-dir', 'out'), path.join(base, 'meta-a'), path.join(base, 'no-such-out-dir')],
+        ['--meta beneath a directory that does not exist', path.join(base, 'out-b'), path.join(base, 'no-such-meta-dir', 'meta'), path.join(base, 'no-such-meta-dir')],
+      ]) {
+        const r = runNode([mf, '--kind', 'v2', '--out', out, '--meta', meta], context.repository, env);
+        check(r.code === 1 && noSuccessJson(r.stdout), `${label}: exit 1 and no success result (destinations are created non-recursively)`, { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 200) });
+        check(!exists(missing), `${label}: the missing parent directory was not created on the way`, { missing: exists(missing) });
+      }
+    });
+
+    // R2-3. Decision H6: for --kind v2 the output and metadata destinations are each created non-recursively and exclusively, so creation fails if
+    // the path exists in any form, "even when it appears after the initial existence check". A preload scoped to make-fixture.mjs (the technique
+    // of the R7 test) puts an empty directory, or a junction to an empty directory, at the --out path and then, separately, at the --meta path,
+    // immediately before make-fixture's own mkdirSync of that destination. Required: exit 1, no success JSON, the pre-placed entry unchanged
+    // (still an empty directory, or still the junction) and nothing written through it. A marker file proves the destination was placed.
+    await step('R2-3 (H6) a destination that appears after the existence check is refused, not reused', async () => {
+      const preload = path.join(scope.dir, 'inject-race.cjs');
+      fs.writeFileSync(preload, RACE_PRELOAD);
+      const isLink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+      for (const [which, shape] of [['out', 'dir'], ['meta', 'dir'], ['out', 'junction'], ['meta', 'junction']]) {
+        const label = `a ${shape === 'dir' ? 'directory' : 'junction'} appears at --${which}`;
+        const out = scope.sub('racout'), meta = scope.sub('racmeta'), target = scope.sub('ractarget'), mark = scope.sub('racmark');
+        const placed = which === 'out' ? out : meta;
+        if (shape === 'junction') fs.mkdirSync(target, { recursive: true });
+        const r = runNode([mf, '--kind', 'v2', '--out', out, '--meta', meta], context.repository, { ...env, NODE_OPTIONS: `--require "${fwd(preload)}"`, PS_C11A_RACE_PATH: placed, PS_C11A_RACE_MODE: shape, PS_C11A_RACE_TARGET: target, PS_C11A_RACE_MARK: mark });
+        check(exists(mark), `${label}: the destination was placed right before make-fixture's mkdirSync of it (test setup)`, r.stderr.slice(0, 200));
+        check(r.code === 1 && !r.error && noSuccessJson(r.stdout), `${label}: exit 1 and no success result`, { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 200) });
+        if (shape === 'dir') {
+          let st = null; try { st = fs.lstatSync(placed); } catch { /* reported below */ }
+          check(!!st && st.isDirectory() && !st.isSymbolicLink() && fs.readdirSync(placed).length === 0, `${label}: the pre-placed directory is still there and nothing was written into it`, st ? fs.readdirSync(placed).slice(0, 5) : 'missing');
+        } else {
+          check(isLink(placed) && fs.readdirSync(target).length === 0, `${label}: the pre-placed junction is still there and nothing was written through it`, { link: isLink(placed), target: exists(target) ? fs.readdirSync(target).slice(0, 5) : 'missing' });
+          if (isLink(placed)) rmrf(placed);
+        }
+      }
+    });
+
+    // R7. Decisions G7 and H5: the extracted tagged source is kept until every v2 fixture output has been written, and deleted only after the
+    // fixture has fully succeeded. Any failure after createV2InstalledFixture succeeds (base commit, tag, skill copies, isolation checks,
+    // metadata or environment scripts) exits 1, prints no success JSON, and writes to stderr the error followed by the same retained-path line
+    // the helper failures use: "v2-baseline: tagged source kept at <absolute path>". Two late failures are injected with a preload that touches
+    // only make-fixture.mjs: git tag fx-base fails (right after the base commit), and the very last write of the run (live-env.sh) throws. The
+    // success path (deletion) is covered by the first live test above.
+    await step('R7 a failure after the v2 helper succeeded keeps the extracted source and prints its path', async () => {
+      const preload = path.join(scope.dir, 'inject-late-failure.cjs');
+      fs.writeFileSync(preload, LATE_FAIL_PRELOAD);
+      for (const [label, mode] of [['git tag fx-base fails after the base commit', 'tag'], ['the last write of the run (live-env.sh) fails', 'last']]) {
+        const out = scope.sub('v2out'), osTmp = scope.sub('ostmp'); fs.mkdirSync(osTmp, { recursive: true });
+        const r = runNode([mf, '--kind', 'v2', '--out', out], context.repository, { ...env, TEMP: osTmp, TMP: osTmp, TMPDIR: osTmp, PS_C11A_LATE_FAIL: mode, NODE_OPTIONS: `--require "${fwd(preload)}"` });
+        check(r.code === 1 && !r.error && noSuccessJson(r.stdout), `${label}: the fixture fails with exit code exactly 1 and no success JSON`, { code: r.code, stdout: r.stdout.slice(0, 200), stderr: r.stderr.slice(0, 300) });
+        const kept = keptLinePath(r.stderr);
+        check(kept !== null, `${label}: stderr has exactly one line "v2-baseline: tagged source kept at <path>"`, r.stderr.slice(0, 400));
+        const lines = r.stderr.split(/\r?\n/).filter((l) => l !== '');
+        check(kept !== null && lines.findIndex((l) => l === `v2-baseline: tagged source kept at ${kept}`) > 0, `${label}: the error comes first and the retained-path line follows it`, lines.slice(0, 6));
+        if (kept !== null) {
+          check(path.isAbsolute(kept) && kept === kept.trim() && exists(kept) && isInside(osTmp, kept) && !samePath(kept, osTmp), `${label}: the printed path is an absolute path of an existing directory inside the OS temp directory`, kept);
+          check(listFiles(kept).some((f) => /(^|\/)lock\.mjs$/.test(f)), `${label}: the printed directory still holds the extracted tagged source`, listFiles(kept).slice(0, 5));
+          check(!isInside(out, kept), `${label}: the kept directory is outside <out>`);
+          rmrf(kept);
+        }
+        check(listFiles(osTmp).every((f) => !/(^|\/)lock\.mjs$/.test(f)), `${label}: after removing the kept directory nothing else of the tagged source is left in the OS temp directory`, listFiles(osTmp).slice(0, 5));
+      }
+    });
   });
 }
 
@@ -1777,6 +2156,30 @@ async function componentRecords(context) {
       mainShape(check, 'unknown component', v);
       check(v && v.exitCode === 1 && v.stderr === '' && eq(nonEmptyLines(v.stdout), ['COMPONENT  FAIL  component-unknown', '0 PASS / 0 FAIL / 0 SKIP', `RESULTS  ${resultsPath}`]) && ran.length === 0, 'component-unknown, exit 1, no group ran', v && nonEmptyLines(v.stdout));
       check(cap.length === 1 && eq(plain(cap[0].report), { component: 'C99', ok: false, errors: [{ code: 'component-unknown' }], summary: { passed: 0, failed: 0, skipped: 0 }, results: [] }), 'the retained report is the exact structural report', cap[0] && cap[0].report);
+    });
+
+    // R8. Plan 3.1: "Within a category, use expected order where available, otherwise first implementation occurrence. ID-specific errors include
+    // id." The first issue of a category is therefore the first ID in the expected list that has the problem, not the first problem met while
+    // scanning the registered implementations or the second occurrence of a duplicate. Same checks as the structural table above.
+    const ordering = [
+      ['duplicate-expected, expected [A, B, B, A]: A comes first in expected order', [A, B, { id: 'B', name: 'again' }, { id: 'A', name: 'again' }], [noop('A'), noop('B')], 'duplicate-expected', 'A'],
+      ['duplicate-expected, expected [B, A, A, B]: B comes first in expected order', [B, A, { id: 'A', name: 'again' }, { id: 'B', name: 'again' }], [noop('A'), noop('B')], 'duplicate-expected', 'B'],
+      ['inventory-invalid, expected [A, B], malformed callbacks registered [B, A]: A comes first in expected order', [A, B], [{ id: 'B', run: 'not callable' }, { id: 'A', run: 'not callable' }], 'inventory-invalid', 'A'],
+      ['inventory-invalid, expected [B, A], malformed callbacks registered [A, B]: B comes first in expected order', [B, A], [{ id: 'A', run: 'not callable' }, { id: 'B', run: 'not callable' }], 'inventory-invalid', 'B'],
+      ['duplicate-group, expected [A, B], implementations registered [B, A, B, A]: A comes first in expected order', [A, B], [noop('B'), noop('A'), noop('B'), noop('A')], 'duplicate-group', 'A'],
+    ];
+    await step('R8 structural errors are reported in expected order within a category', async () => {
+      for (const [label, expected, impls, code, id] of ordering) {
+        const ran = [], cap = [];
+        const wrap = (list) => list.map((i) => (i && typeof i.run === 'function' ? { ...i, run: () => { ran.push(i.id); return i.run(); } } : i));
+        const v = await cm(['--component', 'Cx'], { registry: mkRegistry('Cx', expected, wrap(impls)), context, writeEvidence: mkWriter(cap) });
+        const want = { code, id };
+        check(ran.length === 0, `${label}: no group runs after a structural failure`, ran);
+        check(cap.length === 1 && eq(plain(cap[0].report.errors), [want]) && eq(plain(cap[0].report.results), []) && eq(plain(cap[0].report.summary), { passed: 0, failed: 0, skipped: 0 }), `${label}: exactly the first issue ${JSON.stringify(want)} in the retained report`, cap[0] && cap[0].report.errors);
+        check(v && v.exitCode === 1 && v.stderr === '' && eq(nonEmptyLines(v.stdout), [`COMPONENT  FAIL  ${code}  ${id}`, '0 PASS / 0 FAIL / 0 SKIP', `RESULTS  ${resultsPath}`]), `${label}: exit 1 and the issue line, zero totals and the RESULTS line`, v && nonEmptyLines(v.stdout));
+        const direct = await rc.runComponentAssertions('Cx', context, { registry: mkRegistry('Cx', expected, impls) });
+        check(direct && direct.ok === false && eq(plain(direct.errors), [want]), `${label}: runComponentAssertions reports the same first issue`, direct && direct.errors);
+      }
     });
 
     // ---- 4.4 execution outcomes ----
@@ -1990,6 +2393,7 @@ async function strictGate(context) {
       expectOk('99 PASS plus the Windows R13d skip', mut((m) => setRec(m, 'R13d', (r) => { r.kind = 'SKIP'; r.reason = R13D_REASON; })), { passed: 99, failed: 0, skipped: 1 });
       expectOk('CRLF line framing', full({ eol: '\r\n' }), OKFULL);
       expectOk('CRLF framing with the Windows R13d skip', mut((m) => { m.eol = '\r\n'; setRec(m, 'R13d', (r) => { r.kind = 'SKIP'; r.reason = R13D_REASON; }); }), { passed: 99, failed: 0, skipped: 1 });
+      // H7a: a line that begins with exactly eight spaces and "- " is a failure diagnostic, never a totals candidate, even if it contains PASS.
       expectOk('non-record diagnostic lines before the records are not results', mut((m) => { m.pre = ['note: starting the suite', '        - PASS  R86  case R86 (an indented diagnostic is not a record)']; }), OKFULL);
       expectOk('record-shaped lines on stderr do not count', mut((m) => { m.stderr = 'PASS  R87  case R87\nFAIL  R01  case R01\n'; }), OKFULL);
       expectOk('a non-Windows platform with no skip', mut((m) => { m.env = { ...GATE_ENV, platform: 'linux' }; }), OKFULL);
@@ -2012,8 +2416,12 @@ async function strictGate(context) {
       expectErr('replace R86 PASS with FAIL', mut((m) => setRec(m, 'R86', (r) => { r.kind = 'FAIL'; r.diag = ['boom']; })), [{ code: 'failed-record', id: 'R86' }], { summary: { passed: 99, failed: 1, skipped: 0 }, resultsFile: RES });
       expectErr('replace R86 with R86/C2/metadata', mut((m) => setRec(m, 'R86', (r) => { r.id = 'R86/C2/metadata'; r.name = 'case R86/C2/metadata'; })), [{ code: 'unexpected-record', id: 'R86/C2/metadata' }]);
       expectErr('R86 record exists only on stderr', mut((m) => { m.records = m.records.filter((r) => r.id !== 'R86'); m.stderr = 'PASS  R86  case R86\n'; }), [{ code: 'missing-record', id: 'R86' }]);
+      // H7a: PASS directly after an ANSI sequence ending in "m" is not a whole word, so this line is not a totals candidate; plan 4.6 table: missing-record.
       expectErr('R86 line has an ANSI prefix', mut((m) => setRec(m, 'R86', (r) => { r.raw = '\u001b[32mPASS  R86  case R86\u001b[0m'; })), [{ code: 'missing-record', id: 'R86' }]);
-      expectErr('R86 line is indented', mut((m) => setRec(m, 'R86', (r) => { r.raw = '    PASS  R86  case R86'; })), [{ code: 'missing-record', id: 'R86' }]);
+      // H7a: a record-shaped line indented by any other amount than a failure diagnostic's eight spaces (here four) holds the whole word PASS, is not a
+      // well-formed record and is not a failure diagnostic, so it is a second totals candidate: summary-invalid (G12 fields filled from the valid envelope).
+      expectErr('R86 line is indented', mut((m) => setRec(m, 'R86', (r) => { r.raw = '    PASS  R86  case R86'; })), [{ code: 'summary-invalid' }]);
+      // H7a: PASSED is not the whole word PASS, so it is not a totals candidate either.
       expectErr('PASSED is not a result keyword line', mut((m) => setRec(m, 'R86', (r) => { r.raw = 'PASSED  R86  case R86'; })), [{ code: 'missing-record', id: 'R86' }]);
       expectErr('zero records with a valid 0/0/0 summary and report', mut((m) => { m.records = []; }), [{ code: 'missing-record', id: 'R01' }]);
     });
@@ -2069,6 +2477,88 @@ async function strictGate(context) {
       for (const [label, over] of Object.entries(cases)) expectErr(label, mut((m) => Object.assign(m, over)), [{ code: 'summary-invalid' }], { g12: envNull.has(label) ? 'null' : envSkip.has(label) ? 'skip' : 'filled' });
       expectErr('a missing envelope leaves summary and resultsFile null', mut((m) => { m.envelopeLines = []; }), [{ code: 'summary-invalid' }], { summary: null, resultsFile: null, g12: 'null' });
       expectErr('a relative resultsFile leaves summary and resultsFile null', mut((m) => { m.envelopeEdit = (o) => ({ ...o, resultsFile: 'results.json' }); }), [{ code: 'summary-invalid' }], { summary: null, resultsFile: null, g12: 'null' });
+    });
+    // R6. Plan 3.3: "Require exactly one total line and one JSON envelope" and, in the first-violation list, "Missing, malformed, repeated or
+    // incomplete total/envelope: summary-invalid". A malformed or repeated total line must not be ignored just because a valid one is also
+    // present, whichever comes first: the envelope stays valid, so summary and resultsFile are filled (G12).
+    await step('R6 a malformed or repeated total line beside a valid one is summary-invalid', async () => {
+      const valid = totalLine(OKFULL);
+      const beside = [
+        ['100 PASS / 0 FAIL', 'a total line without the SKIP count'],
+        [`${valid} extra`, 'a total line with a trailing word'],
+        ['1.5 PASS / 0 FAIL / 0 SKIP', 'a total line with a fractional count'],
+        ['-1 PASS / 101 FAIL / 0 SKIP', 'a total line with a negative count'],
+        [totalLine({ passed: 99, failed: 0, skipped: 1 }), 'a second well-formed total line with other counts'],
+        [valid, 'a repeated identical total line'],
+      ];
+      for (const [line, what] of beside) {
+        expectErr(`${what} after the valid total line`, mut((m) => { m.totalLines = [valid, line]; }), [{ code: 'summary-invalid' }]);
+        expectErr(`${what} before the valid total line`, mut((m) => { m.totalLines = [line, valid]; }), [{ code: 'summary-invalid' }]);
+      }
+      const one = totalLine({ passed: 1, failed: 0, skipped: 0 });
+      expectErr('focused R86: a total line without the SKIP count after the valid one', focus('R86', { totalLines: [one, '1 PASS / 0 FAIL'] }), [{ code: 'summary-invalid' }]);
+      expectErr('focused R86: a total line without the SKIP count before the valid one', focus('R86', { totalLines: ['1 PASS / 0 FAIL', one] }), [{ code: 'summary-invalid' }]);
+    });
+    // R2-1. Decision H7 as narrowed by H7a (plans 3.1, 3.3, 4.6): a totals candidate is a stdout line that (1) contains PASS as a whole word in any
+    // letter case (not preceded or followed by an ASCII letter, digit or underscore, so PASSED, xPASS, PASS_1 and PASS right after an ANSI "m" are
+    // not candidates), (2) is not a well-formed record line and (3) is not a failure diagnostic, that is, does not begin with exactly eight spaces
+    // and "- ". The transcript must hold exactly one candidate and it must match "<n> PASS / <n> FAIL / <n> SKIP" exactly, each <n> a decimal
+    // integer; zero candidates, more than one, or one that does not match exactly is summary-invalid, and this check runs before the
+    // record-inventory checks. No shape of a malformed total is guessed: every one below sits next to a valid total, with valid records, envelope
+    // and report, so only the candidate rule can reject it. The envelope stays valid, so summary and resultsFile are filled (G12).
+    await step('R2-1 (H7) a line with the word PASS beside the one valid total line is summary-invalid, whatever its shape', async () => {
+      const valid = totalLine(OKFULL), one = totalLine({ passed: 1, failed: 0, skipped: 0 });
+      const shapes = [
+        ['.5 PASS / 0 FAIL / 0 SKIP', 'a total with a leading decimal point'],
+        ['1e2 PASS / 0 FAIL / 0 SKIP', 'a total with an exponent count'],
+        ['0x64 PASS / 0 FAIL / 0 SKIP', 'a total with a hexadecimal count'],
+        ['+100 PASS / 0 FAIL / 0 SKIP', 'a total with a signed count'],
+        ['1,000 PASS / 0 FAIL / 0 SKIP', 'a total with a thousands separator'],
+        ['PASS: 100', 'a PASS: label line'],
+        ['100 pass / 0 fail / 0 skip', 'a lowercase total'],
+        ['100 Pass / 0 Fail / 0 Skip', 'a mixed-case total'],
+        ['100 PASS 0 FAIL 0 SKIP', 'a total without slashes'],
+        [' 100 PASS / 0 FAIL / 0 SKIP', 'a total with a leading space'],
+        ['100 PASS / 0 FAIL / 0 SKIP ', 'a total with a trailing space'],
+        ['100 PASS / 0 FAIL / 0 SKIP.', 'a total with a trailing period'],
+        ['100  PASS / 0 FAIL / 0 SKIP', 'a total with a doubled space'],
+        ['100\tPASS / 0 FAIL / 0 SKIP', 'a total with a tab'],
+        ['Totals: 100 PASS / 0 FAIL / 0 SKIP', 'a total with a text prefix'],
+        ['all tests pass', 'a prose line with the whole word pass'],
+        ['(PASS) 100', 'a line with PASS in parentheses (punctuation is not a word character)'],
+        ['PASS-1', 'a line with PASS followed by a hyphen'],
+        [`${' '.repeat(7)}- 100 PASS / 0 FAIL / 0 SKIP`, 'a seven-space "- " line that contains PASS'],
+        [`${' '.repeat(9)}- 100 PASS / 0 FAIL / 0 SKIP`, 'a nine-space "- " line that contains PASS'],
+        [`${' '.repeat(8)}100 PASS / 0 FAIL / 0 SKIP`, 'an eight-space line without the "- " marker'],
+        [`${' '.repeat(8)}-100 PASS / 0 FAIL / 0 SKIP`, 'an eight-space line whose dash is not followed by a space'],
+      ];
+      for (const [line, what] of shapes) {
+        for (const [place, order] of [['after', (v, l) => [v, l]], ['before', (v, l) => [l, v]]]) {
+          expectErr(`${what} ${place} the valid total line`, mut((m) => { m.totalLines = order(valid, line); }), [{ code: 'summary-invalid' }]);
+          expectErr(`focused R86: ${what} ${place} the valid total line`, focus('R86', { totalLines: order(one, line) }), [{ code: 'summary-invalid' }]);
+        }
+      }
+      // The candidate check runs before the record-inventory checks: the same malformed line beside a valid total wins over a missing, failed
+      // or duplicated record.
+      const consistent = (m, line) => { m.totalLines = [totalLine(tallyOf(m.records)), line]; };
+      expectErr('a malformed total beats a missing record', mut((m) => { m.records = m.records.filter((r) => r.id !== 'R86'); consistent(m, '.5 PASS / 0 FAIL / 0 SKIP'); }), [{ code: 'summary-invalid' }]);
+      expectErr('a malformed total beats a failed record', mut((m) => { setRec(m, 'R86', (r) => { r.kind = 'FAIL'; r.diag = ['boom']; }); consistent(m, '1e2 PASS / 0 FAIL / 0 SKIP'); }), [{ code: 'summary-invalid' }]);
+      expectErr('a malformed total beats a duplicated record', mut((m) => { m.records.push({ kind: 'PASS', id: 'R86', name: 'case R86' }); consistent(m, 'PASS: 100'); }), [{ code: 'summary-invalid' }]);
+      expectErr('focused R86: a malformed total beats a missing record', focus('R86', { records: [], totalLines: [totalLine({ passed: 0, failed: 0, skipped: 0 }), '.5 PASS / 0 FAIL / 0 SKIP'] }), [{ code: 'summary-invalid' }]);
+      // Negative controls: exactly one valid total with valid records still passes, and lines without the word PASS are not candidates.
+      expectOk('control: exactly one valid total line and valid records', full(), OKFULL);
+      expectOk('control (focused R86): exactly one valid total line and a valid record', focus('R86'), { passed: 1, failed: 0, skipped: 0 });
+      expectOk('control: lines without the word PASS are not total candidates', mut((m) => { m.pre = ['note: 100 tests ran in 12 s', 'summary: 0 FAIL / 0 SKIP']; }), OKFULL);
+      // H7a: a failure diagnostic (exactly eight spaces, then "- ") is never a totals candidate, even when it contains a perfect-looking total line.
+      const diag = `${' '.repeat(8)}- 100 PASS / 0 FAIL / 0 SKIP`;
+      expectOk('control: a failure diagnostic line that contains PASS next to the valid total is not a candidate', mut((m) => { m.pre = [diag]; }), OKFULL);
+      expectOk('control (focused R86): a failure diagnostic line that contains PASS is not a candidate', focus('R86', { pre: [diag] }), { passed: 1, failed: 0, skipped: 0 });
+      expectErr('a failure diagnostic that contains PASS under a FAIL record leaves the usual verdict', mut((m) => setRec(m, 'R86', (r) => { r.kind = 'FAIL'; r.diag = ['100 PASS / 0 FAIL / 0 SKIP']; })), [{ code: 'failed-record', id: 'R86' }]);
+      // H7a: PASS must be a whole word. Letters, digits and underscores on either side make the line a non-candidate (and not a result keyword line).
+      const notWords = ['xPASS', 'PASS_1', 'PASSED', 'bypass', '1PASS', 'PASS2', '_PASS', 'password'];
+      expectOk('control: PASS inside a longer word is not a total candidate', mut((m) => { m.pre = [...notWords]; }), OKFULL);
+      expectOk('control (focused R86): PASS inside a longer word is not a total candidate', focus('R86', { pre: [...notWords] }), { passed: 1, failed: 0, skipped: 0 });
+      expectOk('control: the Windows R13d skip transcript with its one total line', mut((m) => setRec(m, 'R13d', (r) => { r.kind = 'SKIP'; r.reason = R13D_REASON; })), { passed: 99, failed: 0, skipped: 1 });
     });
     await step('4.6 exit status and execution failures', async () => {
       expectErr('status 1', mut((m) => { m.status = 1; }), [{ code: 'suite-exit' }]);
