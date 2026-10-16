@@ -439,7 +439,7 @@ process.stdout.write(JSON.stringify(cases.map((c) => { const r = parseToml(c.tom
   const u = S('validate', [], d); check(u.code === 1 && u.json.results.some((x) => x.check === 'toml-unsupported'), 'unsupported syntax is a failure, not a pass', u.json?.results);
 });
 
-test('R17', 'wildcard user exceptions are held back unless provably disjoint', () => {
+test('R17', 'wildcard user exceptions are held back unless provably disjoint', async () => {
   for (const exc of ['Read(!*.example)', 'Read(!**/*.example)', 'Read(!.env.?xample)', 'Read(!*)', 'Read(![.]env.example)']) {
     const d = repo({ '.claude/settings.json': JSON.stringify({ permissions: { deny: [exc] } }) }); begin(d);
     const m = S('merge-claude-settings', ['--run-id', 'run-0001'], d);
@@ -474,6 +474,12 @@ for (const r of rules) for (const e of exc) {
 process.stdout.write(JSON.stringify({ unsound, checked: rules.length * exc.length, paths: paths.length }));`);
   const pr = proc(process.execPath, [probe], TMP);
   check(pr.json && pr.json.unsound.length === 0, 'no pair matched by a common path is reported disjoint', pr.json || pr.stderr);
+  // C1 component assertions (shared policy grammar, matcher and version contract) run inside R17. Their sub-assertion records are
+  // not printed here; R17 fails unless the whole component report is ok.
+  const c1context = { repository: path.resolve(SKILL, '..'), skillRoot: SKILL, tmp: path.join(TMP, 'c1'), env: { ...ENV } };
+  fs.mkdirSync(c1context.tmp);
+  const c1report = await runComponentAssertions('C1', c1context);
+  check(c1report.ok === true, 'C1 component assertions pass', { errors: c1report.errors, failed: c1report.results.filter((r) => r.status !== 'PASS').map((r) => ({ id: r.id, failures: r.failures.slice(0, 5) })) });
 });
 
 // ===================================================== rc.3 review (R18+) ====
