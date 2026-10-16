@@ -7,6 +7,7 @@
 // Importing this module performs no filesystem write, starts no process and runs no test. The test modules it
 // imports are import-safe as well and load this module lazily, so there is no eager read across the cycle.
 import { C11A_IMPLEMENTATIONS } from './c11a.test.mjs';
+import { C1_IMPLEMENTATIONS } from './c1.test.mjs';
 
 const deepFreeze = (v) => { if (v && typeof v === 'object') { for (const x of Object.values(v)) deepFreeze(x); Object.freeze(v); } return v; };
 const ids = (s) => s.trim().split(/\s+/);
@@ -41,10 +42,26 @@ export const COMPONENT_ASSERTIONS = deepFreeze({
     { id: 'V2/C11a/component-records', name: 'strict component result contract' },
     { id: 'V2/C11a/strict-gate', name: 'strict rc1 acceptance contract' },
   ],
+  // C1 plan (docs/plans/2026-10-16-project-setup-v3-rc1-c1.md) section 4.1, in its exact order.
+  C1: [
+    { id: 'R45/C1/grammar', name: 'policy grammar and PQ1 rejection' },
+    { id: 'R45/C1/schema', name: 'strict policy schemas and errors' },
+    { id: 'R44/C1/anchors', name: 'root and any-depth matching' },
+    { id: 'R74/C1/case', name: 'platform-independent case matching' },
+    { id: 'R74/C1/corpus', name: 'shared policy matching corpus' },
+    { id: 'R74/C1/deduplication', name: 'effective entries preserve source metadata' },
+    { id: 'R75/C1/path-validation', name: 'structural checks preserve exact path names' },
+    { id: 'R78/C1/legacy-adapter', name: 'validated non-writing schema-1 adapter' },
+    { id: 'R97/C1/environment-names', name: 'environment-name variant matching' },
+    { id: 'V2/C1/source-helpers', name: 'source helpers use shared policy semantics' },
+    { id: 'V2/C1/exception-overlap', name: 'user exception overlap stays conservative' },
+    { id: 'V2/C1/module-contract', name: 'standalone module and component contracts' },
+  ],
 });
 // The tests-lane descriptors themselves (same objects, same run functions), in a frozen list of our own.
 export const COMPONENT_IMPLEMENTATIONS = Object.freeze({
   C11a: Object.freeze([...C11A_IMPLEMENTATIONS]),
+  C1: Object.freeze([...C1_IMPLEMENTATIONS]),
 });
 
 // ------------------------------------------------------------ selection ----

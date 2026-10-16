@@ -1,4 +1,5 @@
-// Structural validators used by validate.mjs. Zero dependencies.
+// Structural validators used by validate.mjs. The only dependency is the shared policy reader.
+import { readSecurityPolicy } from '../assets/tools/security-policy.mjs';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStrArr = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
@@ -68,4 +69,24 @@ export function checkManifest(m) {
     }
   }
   return errs;
+}
+
+// Plan docs/plans/2026-10-16-project-setup-v3-rc1-c1.md section 2.4: exactly the 20 reader error codes. Classification
+// is by an own code from this list, never by the message or a broad POLICY_ prefix, so an unrelated failure is rethrown.
+const POLICY_ERROR_CODES = new Set([
+  'POLICY_TEXT', 'POLICY_JSON', 'POLICY_ROOT', 'POLICY_VALUE', 'POLICY_SCHEMA', 'POLICY_PATTERNS', 'POLICY_PROJECT_PATTERNS',
+  'POLICY_ENTRY', 'POLICY_GLOB', 'POLICY_ANCHOR', 'POLICY_GLOB_SYNTAX', 'POLICY_GLOBSTAR', 'POLICY_GLOB_PATH',
+  'POLICY_ANCHOR_ANY', 'POLICY_ANCHOR_ROOT', 'POLICY_LEGACY_ANCHOR',
+  'POLICY_PATH_TYPE', 'POLICY_PATH_NUL', 'POLICY_PATH_ABSOLUTE', 'POLICY_PATH_CANONICAL',
+]);
+
+/** Validates a security policy (schema 1 or 2). Returns [] when valid, or the one reader message. */
+export function checkSecurityPolicy(value) {
+  try {
+    readSecurityPolicy(value);
+  } catch (e) {
+    if (e instanceof Error && Object.prototype.hasOwnProperty.call(e, 'code') && POLICY_ERROR_CODES.has(e.code)) return [e.message];
+    throw e;
+  }
+  return [];
 }

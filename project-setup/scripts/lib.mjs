@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { matchesPolicyPath, readSecurityPolicy } from '../assets/tools/security-policy.mjs';
 
 export const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const IS_WINDOWS = process.platform === 'win32';
@@ -107,12 +108,26 @@ export function loadSecretSpec() {
   return JSON.parse(fs.readFileSync(path.join(SKILL_DIR, 'data', 'secret-paths.json'), 'utf8'));
 }
 
+/**
+ * The effective secret globs (lowercase, deduplicated, managed then project entries) of a validated policy. A projection
+ * only, not an anchored matching API: it drops the anchors, so match with isSecretPath / matchesPolicyPath instead.
+ */
 export function secretGlobs(spec = loadSecretSpec()) {
-  return spec.patterns.map((p) => p.glob);
+  return readSecurityPolicy(spec).effectivePatterns.map((e) => e.glob);
 }
 
-export function isSecretPath(relPosix, spec) {
-  return matchesAny(relPosix, secretGlobs(spec));
+// A candidate that fails the structural path checks is treated as secret: callers then refuse or skip it, and invalid
+// input is never normalized into acceptance. A malformed policy is not a path problem: its error propagates.
+const INVALID_PATH_CODES = new Set(['POLICY_PATH_TYPE', 'POLICY_PATH_NUL', 'POLICY_PATH_ABSOLUTE', 'POLICY_PATH_CANONICAL']);
+
+/** Shared policy semantics (assets/tools/security-policy.mjs): anchors, host-independent case, Windows aliases. */
+export function isSecretPath(relPosix, spec = loadSecretSpec()) {
+  try {
+    return matchesPolicyPath(relPosix, spec);
+  } catch (e) {
+    if (e instanceof Error && Object.prototype.hasOwnProperty.call(e, 'code') && INVALID_PATH_CODES.has(e.code)) return true;
+    throw e;
+  }
 }
 
 /**
