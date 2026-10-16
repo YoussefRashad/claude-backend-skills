@@ -1185,3 +1185,19 @@ plan critique raised two more. The maintainer decided each one; they bind the rc
   so one pattern could hide a file from one tool and expose it to another. No existing project is
   affected: the v2 base list and all 23 patterns in contact-rewards-backend's
   `.ai/security-paths.json` (checked 2026-10-15) use `**` only as whole components.
+- **PQ2 - spellings that name the same file (C1 plan critique, 2026-10-16).** Protection is sized
+  to the real threat: secret names on this team's projects are ASCII (`.env`, `*.pem`,
+  `credentials.json`), the team works on Windows, and the last line of defense is the Claude and
+  Codex deny rules, which do not fold Unicode either. So the shared matcher keeps v2's
+  case-insensitive comparison (JavaScript `toLowerCase()`, wildcards counting code points) and adds
+  only two cheap Windows aliases, per component: the prefix before the first `:` when nonempty
+  (an NTFS stream, so `.env::$DATA` matches `**/.env`), and the component with trailing dots and
+  spaces removed (`.env.`, `.env `), alone and combined. A path is protected when its spelling or
+  any of these alias forms matches. Overlap between a managed deny and a user exception is computed
+  over the same forms, so an unrelated exception never holds a managed deny back. The matcher never
+  rewrites a path: validation returns the exact original string, and Git names stay exact.
+  Accepted residual risks, documented rather than built: Unicode case-fold and normalization
+  aliases on macOS volumes (`ſecrets`, a decomposed `café`, `İ`), and components made only of dots
+  or spaces. Windows 8.3 short names (`CREDEN~1`) cannot be seen in the string; consumers that read
+  files from disk also check the realpath-relative form (C5 for review artifacts, and a C3
+  follow-up for `blocks.mjs --file`).
