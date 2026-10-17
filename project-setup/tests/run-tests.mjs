@@ -397,7 +397,7 @@ test('R14b', 'installer restores every target when any phase fails (incl. backup
   }
 });
 
-test('R15', 'ownership metadata is bound to the approved plan', () => {
+test('R15', 'ownership metadata is bound to the approved plan', async () => {
   const d = repo({ 'TODO.md': 'old\n' }); const r = begin(d);
   put(path.join(r, 'drafts', 'TODO.md'), 'new\n');
   const p = prepare(d);
@@ -415,6 +415,12 @@ test('R15', 'ownership metadata is bound to the approved plan', () => {
   put(path.join(r2, 'ownership.json'), JSON.stringify({ 'TODO.md': 'owned-by-me' })); check(prepare(d2).code === 3, 'invalid ownership value rejected at prepare');
   put(path.join(r2, 'ownership.json'), JSON.stringify({ 'src/app.ts': 'full' })); check(prepare(d2).code === 3, 'ownership for a non-target rejected');
   put(path.join(r2, 'ownership.json'), JSON.stringify({ 'TODO.md': 'keys' })); check(prepare(d2).code === 3, '"keys" only valid for .claude/settings.json');
+  // C2 component assertions (ownership, metadata transactions and draft review) run inside R15. Their sub-assertion records are
+  // not printed here; R15 fails unless the whole component report is ok.
+  const context = { repository: path.resolve(SKILL, '..'), skillRoot: SKILL, tmp: path.join(TMP, 'c2'), env: { ...ENV } };
+  fs.mkdirSync(context.tmp, { recursive: true });
+  const rep = await runComponentAssertions('C2', context);
+  check(rep.ok === true, 'C2 component assertions pass', { errors: rep.errors, failed: rep.results.filter((x) => x.status !== 'PASS').map((x) => ({ id: x.id, failures: x.failures.slice(0, 5) })) });
 });
 
 test('R16', 'TOML validation matches tomllib on the conformance corpus; invalid escapes fail validate', () => {
@@ -1157,16 +1163,23 @@ test('S01', 'fresh setup end to end, validate clean', () => {
   put(path.join(d, 'keys.json'), JSON.stringify([{ name: 'DATABASE_URL', required: true, secret: true, description: 'DSN', group: 'Database' }]));
   check(S('env-keys', ['merge', '--keys', path.join(d, 'keys.json'), '--run-id', 'run-0001'], d).code === 0, 'env merge');
   const p = prepare(d); check(p.code === 0 && p.json.changed > 20, 'prepare', p.json);
+  check(p.json?.metadataChanged === 0, 'a fresh setup has no metadata operation (automatic recording is not one)', p.json?.metadataChanged);
   const c = commit(d, p); check(c.code === 0 && c.json.committed, 'commit', c);
+  const mf = JSON.parse(read(path.join(d, '.ai', 'manifest.json')));
+  check(mf.schema === 3, 'a newly written manifest is schema 3', mf.schema);
   const v = S('validate', [], d); check(v.code === 0 && v.json.ok, 'validate clean', v.json?.results?.filter((x) => x.level !== 'pass'));
   check(read(path.join(d, '.env.example')).includes('DATABASE_URL=<REDACTED>') && read(path.join(d, '.env.example')).startsWith('PORT=3000'), 'env template merged, existing lines kept');
-  check(S('detect', [], d).json?.mode === 'update', 'mode becomes update');
+  const dt = S('detect', [], d).json;
+  check(dt?.mode === 'update', 'mode becomes update');
+  const dm = dt?.ai?.manifest;
+  check(dm?.schema === 3 && dm.status === 'current' && dm.needsUpdate === false && Array.isArray(dm.errors) && dm.errors.length === 0, 'detect reports the schema 3 manifest as current', dm);
 });
 
 test('S02', 'rerun with identical inputs is a zero diff (files and manifest)', () => {
   const d = repo({ 'package.json': '{}\n', 'src/a.ts': 'x\n' });
   freshSetup(d); const p = prepare(d); commit(d, p);
   const before = read(path.join(d, '.ai', 'manifest.json'));
+  check(JSON.parse(before).schema === 3, 'the manifest the first run wrote is schema 3', JSON.parse(before).schema);
   S('lock', ['release', '--run-id', 'run-0001'], d);
   freshSetup(d, 'run-0002');
   const p2 = prepare(d, 'run-0002'); check(p2.code === 0 && p2.json.changed === 0, 'no changes', p2.json);
